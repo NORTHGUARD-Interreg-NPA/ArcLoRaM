@@ -1,0 +1,23 @@
+# Purpose: acceptance. Issue #86, Test Record docs/test-tracker/86-run-validity.md.
+# Two Pi Nodes, about 10 min: Node 2 flashed as the C3, Node 5 only watched. Run twice, once left alone (it
+# must be valid) and once with Node 5's log link cut for about 15 s at +3 min (it must be invalid with a
+# port_down of that Pi Node's log and its interval). The cut leaves the board running, so nothing reboots.
+# If the capture's TCP reader keeps a dead link up until its keepalive fires, the marks do not show the cut
+# and this scenario fails the criterion: the port state then needs a liveness check of its own.
+# A local board never shares a session with a Pi Node: they would share a radio network.
+description = "Run validity, Pi Nodes: a log link cut of more than 10 s invalidates the session"
+timeout = "12m"
+dataset = true
+
+[nodes]
+2 = "C3"
+5 = "watch"
+
+[overrides]
+SYNC_BOOT_BURST = "5u"
+
+[[expect]]
+node = 2
+event = "SLOT"
+count = 27
+within = "11m"

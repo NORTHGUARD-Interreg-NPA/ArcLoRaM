@@ -367,9 +367,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     from bench.build import build
     from bench.capture import Capture
     from bench.flash import discover, flash_nodes, select
+    from bench.collector import pi_clock_states
+    from bench.manifest import dumps, read_host, start_manifest
     from bench.programmer import ProgrammerError, Refused
-    from bench.run import follow, run_dir, slice_capture, write_record
+    from bench.run import follow, run_dir
     from bench.scenario import plan
+    from bench.validate import conclude, format_validity
 
     try:
         s, text = _scenario_from_args(args)
@@ -406,6 +409,15 @@ def cmd_run(args: argparse.Namespace) -> int:
                 return 1
             print(f"build {result.build_id} ok; log {result.log_path}")
             since, flashed = flash_nodes(prog, {n: boards[n] for n in s.flashed}, table, result, s.flashed)
+            out = run_dir(shared_root(repo) / RUNS, since, result.build_id)
+            collector_url = os.environ.get("BENCH_COLLECTOR_URL")
+            pi_nodes = [b.node for b in boards.values() if b.remote]
+            clocks_start = pi_clock_states(collector_url, pi_nodes)
+            manifest = start_manifest(command=args.command_text, worktree=worktree_name(repo),
+                                      bench_commit=_head(repo), build_id=result.build_id, scenario=s, boards=boards,
+                                      others=others, started=since, flashed=flashed, host=read_host())
+            out.mkdir(parents=True, exist_ok=True)      # `bench note` finds the running session by its manifest
+            (out / "manifest.toml").write_text(dumps(manifest), encoding="utf-8")
             outcome = follow(s, boards, result.build_id, capture_dir, since, reset=prog.reset, flashed=flashed)
         except Held as exc:
             print(f"bench run: {_held_note(exc)}", file=sys.stderr)
@@ -413,11 +425,68 @@ def cmd_run(args: argparse.Namespace) -> int:
         except (LookupError, RuntimeError, ValueError, Refused, ProgrammerError) as exc:
             print(f"bench run: {exc}{_down_note(prog)}", file=sys.stderr)
             return 1
-        out = run_dir(shared_root(repo) / RUNS, since, result.build_id)
-        slice_capture(capture_dir, out, [b.node for b in boards.values()], since, outcome.ended)
-        report = write_record(out, text, s, result.build_id, outcome, boards, others)
-        print(f"{outcome.verdict}\nrecord: {report}")
-        return outcome.code
+        clocks_end = pi_clock_states(collector_url, pi_nodes)
+        clocks = {name: (clocks_start[name], clocks_end.get(name, {})) for name in clocks_start}
+        assessment = conclude(out, capture_dir, text, s, result.build_id, outcome, boards, others, manifest,
+                              read_host(), clocks)
+        print(outcome.verdict)
+        for line in format_validity(assessment):
+            print(line)
+        print(f"record: {out / 'report.md'}")
+        return assessment.code
+
+
+def _head(repo: Path) -> str:
+    """The short commit of the checkout bench runs from."""
+    return subprocess.run(["git", "-C", str(repo), "rev-parse", "--short", "HEAD"], check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
+def cmd_validate(args: argparse.Namespace) -> int:
+    """Say again, from a stored record alone, whether its data can be used: exit 0 pass, 1 fail, 2 timeout,
+    3 not a record, 4 invalid."""
+    from arclog.validity import invalidating
+
+    from bench.manifest import tomllib
+    from bench.validate import assess, format_validity
+
+    record = Path(args.record)
+    if not (record / "manifest.toml").is_file():
+        print(f"bench validate: {record} has no manifest.toml (not a run record, or one written before "
+              "manifests)", file=sys.stderr)
+        return 3
+    try:
+        a = assess(record)
+        stored = tomllib.loads((record / "manifest.toml").read_text(encoding="utf-8"))["run"].get("exit_code")
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"bench validate: {record}: {exc!r}", file=sys.stderr)
+        return 3
+    verdict = {0: "PASS", 1: "FAIL"}.get(a.verdict_code, "TIMEOUT or no verdict")
+    print(f"{record.name}: {'INVALID' if invalidating(a.causes, a.dataset) else 'valid'}; the trace alone gives "
+          f"{verdict}; exit code {a.code}")
+    for line in format_validity(a):
+        print(line)
+    if stored is not None and stored != a.code:
+        print(f"differs from the exit code {stored} stored in the manifest at the end of the run")
+    return a.code
+
+
+def cmd_note(args: argparse.Namespace) -> int:
+    """A timestamped note in the running session: a board moved, the ambient temperature, a replug."""
+    from datetime import datetime, timezone
+
+    from bench.manifest import append_note, find_running
+
+    runs = Path(args.runs) if args.runs else shared_root(Path(args.repo) if args.repo else find_repo(Path.cwd())) / RUNS
+    now = datetime.now(timezone.utc)
+    folder = find_running(runs, now)
+    if folder is None:
+        print("bench note: no running session (no record folder with a manifest that has no end yet)",
+              file=sys.stderr)
+        return 1
+    append_note(folder, " ".join(args.text), now)
+    print(f"note added to {folder.name}")
+    return 0
 
 
 def cmd_scenario(args: argparse.Namespace) -> int:
@@ -495,7 +564,8 @@ def build_parser() -> argparse.ArgumentParser:
     f.set_defaults(func=cmd_flash)
 
     rn = sub.add_parser("run", help="run a scenario: build, flash, act, decide, record; "
-                                    "exit 0 pass, 1 fail, 2 timeout, 3 invalid scenario")
+                                    "exit 0 pass, 1 fail, 2 timeout, 3 invalid scenario, "
+                                    "4 invalid run (a bench fault, or a firmware event in a dataset)")
     rn.add_argument("scenario", nargs="?", help="scenario file (TOML); or describe the run with the options")
     rn.add_argument("--node", action="append", type=parse_assignment, metavar="ID=CLASS",
                     help="flash Node ID as C1/C2/C3, e.g. 2=C2; repeat for several")
@@ -513,6 +583,17 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--probe-uid", action="append", metavar="ID",
                     help="read this board's UID over SWD (probe serial number or Pi Node name)")
     rn.set_defaults(func=cmd_run)
+
+    v = sub.add_parser("validate", help="say again, from a stored run record alone, whether its data can be used; "
+                                        "exit 0 pass, 1 fail, 2 timeout, 3 not a record, 4 invalid")
+    v.add_argument("record", metavar="RUN_DIR", help="a record folder of tools/arclog/runs/")
+    v.set_defaults(func=cmd_validate)
+
+    n = sub.add_parser("note", help="add a timestamped note to the running session (a board moved, the ambient "
+                                    "temperature, a replug)")
+    n.add_argument("text", nargs="+")
+    n.add_argument("--runs", help=argparse.SUPPRESS)
+    n.set_defaults(func=cmd_note)
 
     sc = sub.add_parser("scenario", help="check a scenario file without touching the boards")
     sc.add_argument("action", choices=["check"])

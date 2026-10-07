@@ -282,6 +282,16 @@ class Verdict:
 
 
 @dataclass
+class Failure:
+    """One thing that failed the run: what, on which node and when (`kind` names it for a caller that sorts them)."""
+
+    reason: str
+    kind: str = "other"
+    node: str | None = None
+    at: datetime | None = None
+
+
+@dataclass
 class _NodeState:
     spec: NodeSpec
     booted: bool = False            # first BOOT after since seen: checks are on
@@ -295,14 +305,20 @@ class _NodeState:
 
 
 class Run:
-    """Decides a run from lines (fed in time order per node) and clock ticks."""
+    """Decides a run from lines (fed in time order per node) and clock ticks.
+
+    The first failure is the verdict. With `keep_going` a failure only goes to `failures` and the lines keep
+    being read, so a caller can list every failure of a finished run.
+    """
 
     def __init__(self, spec: Spec, since: datetime,
-                 report: Callable[[str], None] = lambda msg: None) -> None:
+                 report: Callable[[str], None] = lambda msg: None, keep_going: bool = False) -> None:
         self.spec = spec
         self.since = since
         self.report = report
+        self.keep_going = keep_going
         self.verdict: Verdict | None = None
+        self.failures: list[Failure] = []
         self.armed_at: datetime | None = None
         self._nodes = {n: _NodeState(s) for n, s in spec.nodes.items()}
         self._seq = SeqTracker()
@@ -316,9 +332,12 @@ class Run:
     def _at(self, t: datetime) -> str:
         return f"+{(t - self.since).total_seconds():.1f}s"
 
-    def _fail(self, reason: str) -> None:
+    def _fail(self, reason: str, kind: str = "other", node: str | None = None,
+              at: datetime | None = None) -> None:
         if self.verdict is None:
-            self.verdict = Verdict(FAIL, reason)
+            self.failures.append(Failure(reason, kind, node, at))
+            if not self.keep_going:
+                self.verdict = Verdict(FAIL, reason)
             self.report(f"FAIL {reason}")
 
     def _checking(self, st: _NodeState) -> bool:
@@ -345,7 +364,7 @@ class Run:
         lost = self._seq.feed(line).lost
         if lost:
             self._fail(f"{line.node} {lost} line(s) lost before core {line.core} #{line.seq:02x} "
-                       f"{line.event} {self._at(t)}")
+                       f"{line.event} {self._at(t)}", "lost_lines", line.node, t)
             return
         for problem in validate(line):
             self._fail(f"{line.node} {problem} {self._at(t)}")
@@ -385,7 +404,7 @@ class Run:
                             f"waiting for {self.spec.build} {self._at(t)}")
                 return
             self._fail(f"{name} core {core} booted build={seen}, expected {self.spec.build} "
-                       f"{self._at(t)}")
+                       f"{self._at(t)}", "wrong_build", name, t)
             return
         if st.armed_at is not None:
             # A reboot: counted on the CM4, which starts the CM0+.
@@ -395,11 +414,11 @@ class Run:
                 st.linked = False
                 if st.reboots > st.spec.reboots:
                     self._fail(f"{name} unexpected reboot ({st.reboots}, {st.spec.reboots} allowed) "
-                               f"{self._at(t)}")
+                               f"{self._at(t)}", "unplanned_reboot", name, t)
                     return
                 self.report(f"ok   {name} reboot {st.reboots}/{st.spec.reboots} {self._at(t)}")
             elif not st.cm4_rebooted:
-                self._fail(f"{name} CM0+ rebooted alone {self._at(t)}")
+                self._fail(f"{name} CM0+ rebooted alone {self._at(t)}", "unplanned_reboot", name, t)
                 return
             else:
                 st.cm4_rebooted = False

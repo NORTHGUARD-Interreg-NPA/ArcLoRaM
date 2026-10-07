@@ -41,14 +41,17 @@ Every run, whatever its purpose (acceptance, performance or spontaneous), leaves
    A node whose capture file has had no new line for over 60 s while its port answers is a node silence: add a row to `docs/test-tracker/node-silences.md` (the fourth gets an investigation), then reset it.
    Done when every Node ID the scenario names is listed and free; a scenario that needs a board `bench boards` does not list says so, it is not cut down.
 3. **Run.** `bench run <scenario>`: it builds the working tree (uncommitted changes included), flashes, fires the actions and decides.
-   Done when it exits: 0 PASS, 1 FAIL, 2 TIMEOUT, 3 invalid scenario.
+   Done when it exits: 0 PASS, 1 FAIL, 2 TIMEOUT, 3 invalid scenario, 4 invalid run.
 4. **Read the verdict**, then fix and go back to 3:
    - build failure: the diagnostics are printed with repo paths; the build line prints the path of the full log (`logs\build-<UTC time>-<Build ID>.log` in the worktree's Build Tree, kept for run and flash as well).
    - `FAIL`: the reason names the node, the line and the time (`+12.3s`); read the node's lines around it in the record, `tools/arclog/runs/<start>-<build>/<node>-*.log`.
    - `TIMEOUT`: the reason lists what never happened; check the record for why (a board not booting, a peer silent, a sync never reached).
    - lost lines (`N line(s) lost`) are a firmware trace problem, not noise: find which lines vanished before changing the scenario.
    A verdict is evidence about the firmware; change the scenario only when it expected the wrong thing, and say so.
-   A run that failed for a bench reason (host sleep, capture outage, a dead radio) is no verdict on the firmware: note the cause and run again.
+   Exit 4 is an invalid run: a bench fault (a port down for over 10 s, a host that was not running, a clock step, a Pi clock off) or, in a `dataset = true` scenario, a firmware event.
+   The report opens with the cause, and `bench validate <run dir>` gives it again from the record; it is no verdict on the firmware: put the cause in the Runs row and run again.
+   `bench note "<text>"` adds a hand-made fact (a board moved, a replug, the ambient temperature) to the running session's manifest.
+   A dead radio or any other bench reason the checks cannot see is still no verdict: note the cause and run again.
 5. **Trace.** Every run, PASS or not, gets a row in the Test Record's Runs table: date, scenario, Build ID, verdict, record path, and what the record showed beyond the verdict.
    On GitHub, the issue the Test Record names gets a comment per decisive verdict: scenario, Build ID, verdict, the criteria it settles with the trace lines that show it, and the Test Record path.
    An acceptance issue is closed once every criterion in its Test Record is ticked.

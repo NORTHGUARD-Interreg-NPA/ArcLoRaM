@@ -5,7 +5,7 @@ Run records under `tools/arclog/runs/` stay on this machine; a Test Record names
 
 ## Bench preconditions
 
-Every bench test assumes the host on AC power with Windows sleep off: a sleep cuts every COM port at once and the capture loses the run (2026-10-01, see `60-multi-port-capture-24h.md`).
+Every bench test assumes the host on AC power with Windows sleep off: a sleep cuts every COM port at once and the capture loses the run (2026-10-01, see `60-multi-port-capture-24h.md`); the capture's marks show it, and the run is then invalid.
 Boards are named by Node ID; `bench boards` gives their probes and ports.
 
 ## Purpose
@@ -61,8 +61,12 @@ A record's state is read, not declared: no Runs row means planned; Runs but unti
 - **Acceptance**: pass or fail on criteria that come from a requirement, fixed before the run.
 - **Baseline and performance**: measured values with their counts and confidence intervals. A threshold exists only where a requirement defines it, and is never set after the data is seen.
 - **Invalid run** (a host sleep, a dead radio, a wrong expectation): stays in Runs with its cause, gets no GitHub comment, and is run again.
+  `bench run` and `bench validate <run dir>` compute it and exit 4: a port down for over 10 s, a host that was not running, a step of the host's clock, a Pi clock off or a gap in the log collector, and, in a scenario with `dataset = true`, a firmware event (lost lines, an unplanned reboot, a wrong Build ID).
+  A dead radio or a wrong expectation is still judged by hand.
+  The check and the manifest format are in `tools/bench/README.md` (Run record, manifest and validity).
 - **A finding** becomes an issue; a spontaneous record links it.
 - **A node that stops logging** while its capture is up is counted in `node-silences.md`; the fourth is investigated.
+  A scenario sets `max_silence` to make `bench run` fail on it; the data stays valid, since it is a verdict on the firmware.
 
 ## Scenario rules
 

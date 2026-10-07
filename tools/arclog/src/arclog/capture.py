@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Callable, Iterator, TextIO
 from urllib.parse import urlsplit
 
+from arclog.marks import Marks
 from arclog.model import Line, format_host_time, parse_line
 
 DEFAULT_BAUD = 9600
@@ -31,10 +32,12 @@ RECONNECT_S = 2.0
 def serial_lines(port: str, baud: int = DEFAULT_BAUD, reconnect: bool = True,
                  log: Callable[[str], None] = lambda m: print(m, file=sys.stderr),
                  duration_s: float | None = None,
+                 on_state: Callable[[bool], None] = lambda up: None,
                  ) -> Iterator[tuple[datetime, str]]:
     """Yield (host UTC time, line) from a serial port, reconnecting on errors.
 
     Stops after duration_s seconds when given, otherwise runs until interrupted.
+    `on_state(True)` is called once the port is open, `on_state(False)` at every error.
     """
     import serial  # pyserial; imported here so offline commands do not need it
 
@@ -44,6 +47,7 @@ def serial_lines(port: str, baud: int = DEFAULT_BAUD, reconnect: bool = True,
         try:
             with serial.Serial(port, baud, timeout=1.0) as ser:
                 down = False
+                on_state(True)
                 log(f"arclog: listening on {port} @ {baud}")
                 buf = bytearray()
                 while True:
@@ -62,6 +66,7 @@ def serial_lines(port: str, baud: int = DEFAULT_BAUD, reconnect: bool = True,
                         if raw.strip():
                             yield datetime.now(timezone.utc), raw
         except (serial.SerialException, OSError) as exc:
+            on_state(False)
             if not reconnect:
                 raise
             if deadline is not None and time.monotonic() >= deadline:
@@ -106,10 +111,11 @@ def _keepalive(sock: socket.socket) -> None:
 
 def tcp_lines(url: str, reconnect: bool = True,
               log: Callable[[str], None] = lambda m: print(m, file=sys.stderr),
-              duration_s: float | None = None) -> Iterator[tuple[datetime, str]]:
+              duration_s: float | None = None,
+              on_state: Callable[[bool], None] = lambda up: None) -> Iterator[tuple[datetime, str]]:
     """Yield (host UTC time, line) from a Pi Node's log server, reconnecting on errors.
 
-    Same contract as serial_lines. Lines the server sent while this reader was away are not
+    Same contract as serial_lines, `on_state` included. Lines the server sent while this reader was away are not
     replayed: the live stream keeps nothing (a recorder on the Pi is the way to not lose them).
     """
     host, port = parse_tcp_url(url)
@@ -121,6 +127,7 @@ def tcp_lines(url: str, reconnect: bool = True,
                 _keepalive(sock)
                 sock.settimeout(1.0)
                 down = False
+                on_state(True)
                 log(f"arclog: listening on {url}")
                 buf = bytearray()
                 while True:
@@ -142,6 +149,7 @@ def tcp_lines(url: str, reconnect: bool = True,
                         if raw.strip():
                             yield datetime.now(timezone.utc), raw
         except OSError as exc:
+            on_state(False)
             if not reconnect:
                 raise
             if deadline is not None and time.monotonic() >= deadline:
@@ -198,8 +206,13 @@ def _reader(port: str, node: str, source: LineSource, out: queue.Queue) -> None:
 def capture(ports: list[tuple[str, str]], out_dir: Path, baud: int = DEFAULT_BAUD,
             on_line: Callable[[Line], None] | None = None,
             duration_s: float | None = None,
-            source: LineSource | None = None) -> None:
-    """Capture (port, node) pairs until interrupted (Ctrl+C) or for duration_s seconds."""
+            source: LineSource | None = None,
+            marks: Marks | None = None) -> None:
+    """Capture (port, node) pairs until interrupted (Ctrl+C) or for duration_s seconds.
+
+    Marks (marks-YYYYMMDD.log) are written next to the daily files. A custom `source` does not report its
+    ports' state, so the marks show them down.
+    """
     ports_seen = [p for p, _ in ports]
     nodes_seen = [n for _, n in ports]
     if not ports:
@@ -208,11 +221,16 @@ def capture(ports: list[tuple[str, str]], out_dir: Path, baud: int = DEFAULT_BAU
         raise ValueError(f"port given twice: {ports_seen}")
     if len(set(nodes_seen)) != len(nodes_seen):
         raise ValueError(f"node name given twice (would share a file): {nodes_seen}")
+    marks = marks or Marks(out_dir, nodes_seen)
     if source is None:
+        node_of = dict(ports)
+
         def source(port: str) -> Iterator[tuple[datetime, str]]:
+            def on_state(up: bool) -> None:
+                (marks.port_up if up else marks.port_down)(node_of[port])
             if port.startswith("tcp://"):
-                return tcp_lines(port, duration_s=duration_s)
-            return serial_lines(port, baud, duration_s=duration_s)
+                return tcp_lines(port, duration_s=duration_s, on_state=on_state)
+            return serial_lines(port, baud, duration_s=duration_s, on_state=on_state)
 
     lines: queue.Queue = queue.Queue()
     writers = {node: DailyWriter(out_dir, node) for _, node in ports}
@@ -222,6 +240,7 @@ def capture(ports: list[tuple[str, str]], out_dir: Path, baud: int = DEFAULT_BAU
     running = len(ports)
     try:
         while running:
+            marks.tick()
             try:
                 # A timeout keeps Ctrl+C responsive on Windows.
                 node, t, item = lines.get(timeout=0.5)
@@ -240,3 +259,4 @@ def capture(ports: list[tuple[str, str]], out_dir: Path, baud: int = DEFAULT_BAU
     finally:
         for w in writers.values():
             w.close()
+        marks.close()

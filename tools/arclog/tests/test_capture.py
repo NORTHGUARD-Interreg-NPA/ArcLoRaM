@@ -1,11 +1,18 @@
 """capture: several ports in one process, each read and reconnected on its own."""
 
+import contextlib
+import itertools
+import socket
+import sys
+import threading
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
 import arclog.capture as capture_mod
-from arclog.capture import capture
+from arclog.capture import capture, serial_lines, tcp_lines
+from arclog.marks import Marks, read_marks
 from arclog.cli import main
 
 T0 = datetime(2026, 9, 29, 23, 59, 59, tzinfo=timezone.utc)
@@ -220,3 +227,101 @@ def test_a_tcp_url_needs_a_host_and_a_port(url):
 
 def test_a_tcp_url_gives_host_and_port_and_ignores_the_label():
     assert capture_mod.parse_tcp_url("tcp://100.64.0.11:4000/nuna-node-01") == ("100.64.0.11", 4000)
+
+
+@contextlib.contextmanager
+def log_server(*connections):
+    """A Pi Node's log server on loopback: for each connection the bytes it sends, then whether it closes
+    (otherwise it holds the connection open until the test ends)."""
+    server = socket.create_server(("127.0.0.1", 0))
+    release = threading.Event()
+
+    def serve():
+        for data, close in connections:
+            conn, _ = server.accept()
+            conn.sendall(data)
+            if not close:
+                release.wait(5)
+            conn.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    try:
+        yield f"tcp://127.0.0.1:{server.getsockname()[1]}"
+    finally:
+        release.set()
+        server.close()
+
+
+def test_a_tcp_reader_reports_when_its_connection_is_up_and_down(monkeypatch):
+    monkeypatch.setattr(capture_mod, "RECONNECT_S", 0.01)
+    states = []
+    with log_server((BOOT.encode() + b"\n", True), (SYNC.encode() + b"\n", False)) as url:
+        reader = tcp_lines(url, on_state=states.append, log=lambda m: None)
+        lines = [raw for _, raw in itertools.islice(reader, 2)]
+        reader.close()
+
+    assert lines == [BOOT, SYNC]
+    assert states == [True, False, True]
+
+
+def fake_serial(monkeypatch, *opens):
+    """A `serial` module whose successive opens each play a script: the bytes to read, then the device
+    disappears (None: the port cannot be opened)."""
+    scripts = iter(opens)
+
+    class SerialException(OSError):
+        pass
+
+    class Serial:
+        in_waiting = 0
+
+        def __init__(self, port, baud, timeout=None):
+            script = next(scripts)
+            if script is None:
+                raise SerialException(f"could not open {port}")
+            self.data = bytearray(script)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, n):
+            if not self.data:
+                raise SerialException("device disconnected")
+            chunk, self.data = bytes(self.data[:n]), self.data[n:]
+            return chunk
+
+    monkeypatch.setitem(sys.modules, "serial", SimpleNamespace(Serial=Serial, SerialException=SerialException))
+
+
+def test_a_serial_reader_reports_when_its_port_is_up_and_down(monkeypatch):
+    monkeypatch.setattr(capture_mod, "RECONNECT_S", 0.0)
+    fake_serial(monkeypatch, None, BOOT.encode() + b"\n", SYNC.encode() + b"\n")
+    states = []
+    reader = serial_lines("COM6", on_state=states.append, log=lambda m: None)
+    lines = [raw for _, raw in itertools.islice(reader, 2)]
+    reader.close()
+
+    assert lines == [BOOT, SYNC]
+    assert states == [False, True, False, True]
+
+
+def test_capture_writes_its_marks_next_to_the_daily_files(tmp_path):
+    src = fake_ports({"COM6": [(0, BOOT)], "COM8": []})
+    capture([("COM6", "c3"), ("COM8", "c2")], tmp_path, source=src)
+
+    [path] = tmp_path.glob("marks-*.log")
+    [mark] = read_marks(path)
+    assert sorted(mark.ports) == ["c2", "c3"]
+
+
+def test_capture_marks_a_connected_tcp_port_up(tmp_path):
+    with log_server((BOOT.encode() + b"\n", False)) as url:
+        # A mark is due at every tick: the monotonic clock the marks read moves 10 s per reading.
+        marks = Marks(tmp_path, ["c3"], monotonic=itertools.count(0, 10).__next__)
+        capture([(url, "c3")], tmp_path, duration_s=1.2, marks=marks)
+
+    [path] = tmp_path.glob("marks-*.log")
+    assert any(mark.ports["c3"].up for mark in read_marks(path))

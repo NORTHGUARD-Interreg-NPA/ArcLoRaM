@@ -1,0 +1,22 @@
+# Purpose: acceptance. Issue #86, Test Record docs/test-tracker/86-run-validity.md.
+# Two local boards, about 10 min: Node 1 flashed as the C3, Node 3 only watched. The session is run twice,
+# once left alone (it must be valid) and once with Node 3's USB cable unplugged for about 15 s at +3 min (it
+# must be invalid with a port_down of that COM port and its interval). Node 3 is watched because the unplug
+# power-cycles it, and a reboot of a flashed node would end the run as a FAIL at once.
+# The run is long enough for the marks (one every 10 s) to show the cut: the C3 logs a SLOT every 20 s.
+description = "Run validity, local boards: a USB replug of more than 10 s invalidates the session"
+timeout = "12m"
+dataset = true
+
+[nodes]
+1 = "C3"
+3 = "watch"
+
+[overrides]
+SYNC_BOOT_BURST = "5u"
+
+[[expect]]
+node = 1
+event = "SLOT"
+count = 27
+within = "11m"

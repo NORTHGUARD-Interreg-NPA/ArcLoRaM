@@ -37,6 +37,12 @@ Every line is stored verbatim, prefixed with its host UTC receive time.
 Files rotate at UTC midnight (`<node>-YYYYMMDD.log`).
 Each port is read on its own and reopened automatically after a USB replug or a board reset, without holding back the others.
 
+Next to them, `marks-YYYYMMDD.log` gets one line every 10 s of the host's monotonic clock:
+the UTC time, the monotonic reading (`mono=`), and for every node `up` or `down` with the UTC time of its last change (`c3=up@2026-10-07T14:00:01.123456Z`).
+A port starts `down` and goes `up` when its reader is connected, so a port that never connected shows as down since the start.
+The marks are a separate file because every tool reads `<UTC>\t<line>` in the node files, and a third column would break them.
+They tell what the node files cannot: a port down is a capture gap and not a quiet node, a step of UTC against `mono` is the time service correcting the host, and a stretch without marks is a host that was not running.
+
 ```sh
 uv run arclog capture --port COM5 --node c3 --out runs/2026-09-25
 uv run arclog capture --port COM6 --node c3 --port COM8 --node c2 --port COM9 --node c2b --out runs/2026-09-25 --level M

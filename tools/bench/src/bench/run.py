@@ -149,11 +149,16 @@ def slice_capture(capture_dir: Path, out_dir: Path, nodes: list[str], start: dat
 
 
 def write_record(out_dir: Path, scenario_text: str, s: Scenario, build_id: str, outcome: RunOutcome,
-                 boards: dict[int, Board], others: list[Board]) -> Path:
+                 boards: dict[int, Board], others: list[Board], validity: list[str] | None = None,
+                 invalid: bool = False) -> Path:
+    """`validity` is the lines of the Validity section (see validate.format_validity); `invalid` opens the report
+    with the cause and not with a verdict the data cannot back."""
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "scenario.toml").write_text(scenario_text, encoding="utf-8")
     (out_dir / "run.log").write_text("\n".join(outcome.messages) + "\n", encoding="utf-8")
     label = outcome.verdict.split(" ", 1)[0]
+    if invalid:
+        label = f"INVALID (verdict {label})"
     lines = [
         f"# bench run {outcome.started:%Y-%m-%d %H:%M:%S}Z: {label}",
         "",
@@ -174,6 +179,8 @@ def write_record(out_dir: Path, scenario_text: str, s: Scenario, build_id: str, 
     for b in others:
         lines.append(f"| {b.node_id if b.node_id is not None else '?'} | not in the scenario | {b.port} | "
                      f"`{b.sn}` | `{b.build or '?'}` |")
+    if validity:
+        lines += ["", "## Validity", "", *validity]
     lines += ["", "## Actions", ""]
     for i, a in enumerate(s.actions):
         when = f"fired {outcome.fired[i]:%H:%M:%S}" if i in outcome.fired else "not fired"
