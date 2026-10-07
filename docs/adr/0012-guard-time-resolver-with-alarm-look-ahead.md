@@ -3,6 +3,7 @@
 ## Status
 Accepted — 2026-06-25.
 The Rx window duration below (`slot_active_ms + 2 × guard`) is superseded by ADR-0015: the window now ends at the latest packet start derived from `MAX_GUARD_TIME_MS` and the packet's ToA. The alarm offset is unchanged.
+The "Deferred (Version 2)" section is carried out and superseded by ADR-0022 (issue #36): the guard follows the drift estimate, and `GuardTimeResolver_GetGuardMs()` takes the slot start and whether the slot receives from the Sync sender.
 
 ## Context
 

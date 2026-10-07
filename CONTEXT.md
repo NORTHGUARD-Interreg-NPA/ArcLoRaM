@@ -233,16 +233,18 @@ Tx side applies no guard, only its Tx lead, which receivers never see. The Rx
 guard must therefore absorb bilateral drift — both the local and the peer's
 RTC divergence from true time.
 
-**Version 2** (deferred) will replace the constant with a variable value based
-on estimated clock drift, duration without receiving synchronization, and
-possibly other factors. The single-value resolver interface
-(`GuardTimeResolver_GetGuardMs()`) may be split into separate alarm-advance
-and Rx-extension values if V2 requires decoupling them.
+**Version 2** (issue #36, ADR-0022) replaces the constant with `ratio × D(t) + latency`, from the drift estimate.
+`D(t)` is the clock uncertainty seen from the Sync sender: the Residual times the time since the last Sync, plus 3 sigma of the stamp noise, plus one RTC tick, plus the offset a Sync error under the Correction Threshold leaves in the clock.
+The ratio is 3, and the Rx start latency (radio wake, TCXO, PLL) is added after it, being a delay and not an uncertainty.
+The guard is never below `SYNC_PARTICIPATE_THRESHOLD_MS` (a packet that is still Tier 1 must be inside the window) and never above `MAX_GUARD_TIME_MS`.
+It is the cap while the estimate is not valid, while the clock is not `CLOCK_WARM`, and always on C3, the time reference, which has no estimate and is powered: a long Rx window costs it nothing that matters.
+In a phase that is not Sync the sender is a peer with its own error, which the estimate says nothing of: the uncertainty doubles.
+`GuardTimeResolver_GetGuardMs(slot_start_ms, sync_link)` gathers the inputs and the pure `GuardPolicy_Ms` / `GuardPolicy_PeerMs` (`guard_policy.h`) compute it.
 
 **Current guard vs maximum guard.**
-The *current guard* (`GuardTimeResolver_GetGuardMs()`) is how early this node wakes for an Rx slot.
-The *maximum guard* (`MAX_GUARD_TIME_MS`) is a property of the slot grid: the most any node may wake early, which the gaps are sized for (every gap ≥ 2 × `MAX_GUARD_TIME_MS`).
-They are equal in Version 1 but are different concepts: the early wake uses the current guard, the Rx Window end uses the maximum guard.
+The *current guard* (`GuardTimeResolver_GetGuardMs()`) is how early this node wakes for an Rx slot, and, in `CLOCK_WARM`, how late after nominal a packet may still start in its window.
+The *maximum guard* (`MAX_GUARD_TIME_MS`) is a property of the slot grid: the most any node may wake early, which the gaps are sized for (every gap ≥ 2 × `MAX_GUARD_TIME_MS`), and the cap of the guard.
+They are equal while the guard is the cap; the Rx Window end uses the maximum guard for its cap and, while the clock is not `CLOCK_WARM`, for its geometric end.
 
 ### Rx Window
 The span during which a synced node listens in an Rx slot.
@@ -253,6 +255,9 @@ It opens at the early wake (current guard) and closes at the **latest packet sta
 A packet starting later could not end by `slot end + MAX_GUARD_TIME_MS`, the latest instant that never reaches the next slot whatever guard its nodes apply.
 The window is closed by the radio's own Rx timer, which stops on preamble detection: a packet whose preamble arrives in time is always received in full, a later one is not received.
 A **cap** at `slot end + MAX_GUARD_TIME_MS` aborts any reception still running there (a false preamble detection, or a packet detected within the detection margin but too late to fit).
+In `CLOCK_WARM` every packet starts at its nominal start (see Tx Start), so one can only be late by clock error and the window closes at `nominal_start + guard` instead, when that is earlier: an empty window then listens `2 × guard + 262 ms` (the preamble margin the platform adds), where the geometric end made it 1970 ms at a guard of 100 ms.
+A CONTENTION slot keeps the geometric end: its packet starts after channel sensing and a backoff, not at nominal.
+The trace names the guard used (`g`) and the span handed to the radio (`win`) in `RX_WIN`.
 The expected packet is the Sync packet for every slot for now (issue #38).
 Preamble rather than header detection is a deliberate choice (issue #39): it is the earliest proof of a packet, and the Sync packet will move to implicit header.
 Sync timing does not use the preamble detection time (see SyncStamp).
@@ -671,6 +676,8 @@ All sync timing thresholds are derived from this symbol duration:
 If the sync modulation parameters change, all three values must be recomputed
 from the new T_S. They are provisioned constants, not hardcoded magic numbers.
 
+`SYNC_CORRECT_THRESHOLD_MS` (1 ms, ADR-0022) is not derived from T_S: it is the Correction Threshold, set from the noise of the stamp (see Correction Threshold) and the concurrent-transmission budget.
+
 **Pure CT model (deferred):** the design in which every eligible C2 transmits
 the sync packet simultaneously from Cell 0 using its locally-stored epoch from
 the previous Sync Phase — collapsing sync propagation to O(1) regardless of
@@ -807,6 +814,13 @@ _Avoid_: runtime calibration (it is the baseline plus the trim that is applied)
 The rate the clock still gains with the Smooth Calibration applied: the Rate Offset minus the correction applied.
 It is what the guard and the Sync period must absorb.
 
+### Correction Threshold
+The Sync error (`SYNC_CORRECT_THRESHOLD_MS`, 1 ms) below which a `CLOCK_WARM` node leaves its clock alone, so as not to chase the noise of the stamp, and from which it corrects the phase with a shift taken from the error in microseconds.
+It is above the noise floor of the stamp (3 sigma of 106 us and a constant of at most 0.25 ms, about 0.57 ms, NUCLEO) and far under the concurrent-transmission budget.
+The offset it leaves in the clock, up to the threshold, is a term of the Rx guard.
+It is not the participation threshold (8 ms, relay eligibility) nor the resync threshold (100 ms, re-anchor).
+_Avoid_: Tier 2 threshold
+
 ### Sync Algorithm — summary
 
 **Acquisition (CLOCK_COLD → CLOCK_WARM):** requires 1 RTC-set packet + 2 consecutive
@@ -831,8 +845,9 @@ If `clock_error ≥ 8ms` the packet disagrees with Packet 1, and either may be t
 **CLOCK_WARM ongoing check (three-tier per Sync Phase occurrence):**
 C2 always receives Cell 0 to measure error against the incoming epoch:
 - **Tier 1 — error < 8ms (0.25·T_S):** relay in Cells 1+ (store `ms_since_midnight_sync_phase` for TX), up to `SYNC_TX_BUDGET` transmissions per occurrence (see SyncTxBudget).
+  From `SYNC_CORRECT_THRESHOLD_MS` (1 ms) the phase is also corrected, as below; under it the clock is left alone (see Correction Threshold).
 - **Tier 2 — 8ms ≤ error < 100ms (MAX_GUARD_TIME_MS):** SSR-only correction via `HAL_RTCEx_SetSynchroShift`
-  (shift_ticks = error_ms × (PREDIV_S + 1) / 1000); receive only this occurrence.
+  (shift_ticks = the error in µs to the nearest RTC tick); receive only this occurrence.
 - **Tier 3 — error ≥ 100ms (MAX_GUARD_TIME_MS):** full `rtc_set` re-anchor with the same age carry as Packet 1; `ClockState = CLOCK_COLD`; the alarm chain stops for Scanning Rx.
 
 **Cursor suspect:** when the TDMA Machine wakes more than 1.5 × `slot_active_ms` away from the programmed wake, the FrameCursor is untrusted.

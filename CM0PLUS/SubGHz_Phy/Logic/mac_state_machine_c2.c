@@ -27,14 +27,6 @@
 #include <stdbool.h>
 
 /* =========================================================================
- * Constants
- * ========================================================================= */
-
-#ifndef SYNC_PARTICIPATE_THRESHOLD_MS
-#define SYNC_PARTICIPATE_THRESHOLD_MS  8u
-#endif
-
-/* =========================================================================
  * Module state
  * ========================================================================= */
 
@@ -349,6 +341,17 @@ void MAC_OnSyncPacketReceivedTicks(const SyncPayload_t *payload,
             s_hooks.sync_sample(err_us);
         }
 
+        /* Phase correction, from SYNC_CORRECT_THRESHOLD_MS up to the resync
+         * threshold: SSR-only, after the sample, which must see the error
+         * before the shift it causes. Below it the clock is left alone, so as
+         * not to chase the noise of the stamp; the offset that remains is
+         * bounded by that threshold and is part of the Rx guard. */
+        if (error >= SYNC_CORRECT_THRESHOLD_MS * 1000u
+            && error <  SYNC_RESYNC_THRESHOLD_MS * 1000u
+            && s_hooks.rtc_align_subsecond != NULL) {
+            s_hooks.rtc_align_subsecond(err_us);
+        }
+
         if (error < SYNC_PARTICIPATE_THRESHOLD_MS * 1000u) {
             /* Tier 1: participate — store epoch for cells 1+ relay */
             s_sync_phase_epoch_ms       = payload->ms_since_midnight_sync_phase;
@@ -358,10 +361,7 @@ void MAC_OnSyncPacketReceivedTicks(const SyncPayload_t *payload,
             s_epoch_received_this_phase = true;
 
         } else if (error < SYNC_RESYNC_THRESHOLD_MS * 1000u) {
-            /* Tier 2: SSR-only correction; do not relay this occurrence. */
-            if (s_hooks.rtc_align_subsecond != NULL) {
-                s_hooks.rtc_align_subsecond(stamp_ms, expected_arrival);
-            }
+            /* Tier 2: corrected above; do not relay this occurrence. */
 
         } else {
             /* Tier 3: drift ≥ MAX_GUARD_TIME_MS — full re-anchor via rtc_set */
@@ -443,6 +443,7 @@ uint8_t               MAC_GetHopCount(void)                      { return s_hop_
 uint8_t               MAC_GetBeaconTxBudget(void)                 { return s_beacon_tx_budget; }
 uint8_t               MAC_GetSyncTxBudget(void)                   { return s_sync_tx_remaining; }
 uint32_t              MAC_GetSyncPhaseEpochMs(void)             { return s_sync_phase_epoch_ms; }
+uint32_t              MAC_GetLastSyncMs(void)                   { return s_last_sync_received_ms; }
 void MAC_GetSyncPhaseDate(uint8_t *day, uint8_t *month, uint8_t *year)
 {
     if (day)   *day   = s_sync_phase_day;

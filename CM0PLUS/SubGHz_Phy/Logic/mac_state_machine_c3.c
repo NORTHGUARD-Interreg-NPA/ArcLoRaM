@@ -209,6 +209,7 @@ uint8_t               MAC_GetHopCount(void)                      { return s_hop_
 uint8_t               MAC_GetBeaconTxBudget(void)                 { return 0u;                }
 uint8_t               MAC_GetSyncTxBudget(void)                   { return s_sync_tx_remaining; }
 uint32_t              MAC_GetSyncPhaseEpochMs(void)             { return s_sync_phase_epoch_ms; }
+uint32_t              MAC_GetLastSyncMs(void)                   { return 0u; }  /* the time reference receives no Sync */
 void MAC_GetSyncPhaseDate(uint8_t *day, uint8_t *month, uint8_t *year)
 {
     if (day)   *day   = s_sync_phase_day;

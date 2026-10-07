@@ -642,19 +642,18 @@ static void mac_hook_rtc_set(uint32_t target_ms,
            (unsigned)year, (unsigned)month, (unsigned)day, res, (int)shift);
 }
 
-/* Tier 2 hook: apply SSR-only correction when CLOCK_WARM and
- * SYNC_PARTICIPATE_THRESHOLD_MS (8 ms) <= error < SYNC_RESYNC_THRESHOLD_MS (= MAX_GUARD_TIME_MS).
- * Direction: error_ms > 0 → RTC fast → delay (ADD1S=0).
- *            error_ms < 0 → RTC slow → advance (ADD1S=1, SSR set to SUBFS). */
-static void mac_hook_rtc_align_sub(uint32_t stamp_ms,
-                                    uint32_t expected_offset_ms)
+/* Phase correction hook: apply an SSR-only correction when CLOCK_WARM and
+ * SYNC_CORRECT_THRESHOLD_MS <= error < SYNC_RESYNC_THRESHOLD_MS (= MAX_GUARD_TIME_MS).
+ * The error is in microseconds (SYNC_RX erru), so a correction near 1 ms is not
+ * lost to a whole-ms rounding; the shift is the nearest RTC tick (244 us).
+ * Direction: err_us > 0 → RTC fast → delay (ADD1S=0).
+ *            err_us < 0 → RTC slow → advance (ADD1S=1, SSR set to SUBFS). */
+static void mac_hook_rtc_align_sub(int32_t err_us)
 {
-    int32_t error_ms = DayMs_Diff(stamp_ms, expected_offset_ms);
+    uint32_t error_abs   = (err_us < 0) ? (uint32_t)(-err_us) : (uint32_t)(err_us);
+    uint32_t shift_ticks = SyncStamp_UsToTicks(error_abs);
 
-    if (error_ms == 0) return;
-
-    uint32_t error_abs   = (error_ms < 0) ? (uint32_t)(-error_ms) : (uint32_t)(error_ms);
-    uint32_t shift_ticks = (error_abs * (RTC_PREDIV_S + 1u)) / 1000u;
+    if (shift_ticks == 0u) return;
 
     /* Bracket the write for the monotonic counter. A shift still pending
      * (SHPF) is not waited for: the HAL would block this callback until the
@@ -665,7 +664,7 @@ static void mac_hook_rtc_align_sub(uint32_t stamp_ms,
     if (TIMER_IF_RtcWriteBegin()) {
         HAL_StatusTypeDef st;
         hrtc.IsEnabled.RtcFeatures = UINT32_MAX;
-        if (error_ms > 0) {
+        if (err_us > 0) {
             /* RTC fast → delay: SUBFS added to SSR prescaler counter */
             st = HAL_RTCEx_SetSynchroShift(&hrtc, RTC_SHIFTADD1S_RESET, shift_ticks);
         } else {
@@ -677,8 +676,8 @@ static void mac_hook_rtc_align_sub(uint32_t stamp_ms,
         res = "fail";
         if (st == HAL_OK) {
             res      = "ok";
-            shift_ms = shift_ticks_to_ms(shift_ticks, error_ms < 0);
-            applied_ticks = (error_ms > 0) ? -(int32_t)shift_ticks : (int32_t)shift_ticks;
+            shift_ms = shift_ticks_to_ms(shift_ticks, err_us < 0);
+            applied_ticks = (err_us > 0) ? -(int32_t)shift_ticks : (int32_t)shift_ticks;
         }
     }
     TIMER_IF_RtcWriteEnd(false, shift_ms);
@@ -686,9 +685,10 @@ static void mac_hook_rtc_align_sub(uint32_t stamp_ms,
         drift_on_shift(applied_ticks);
     }
 
-    /* err > 0: local clock was ahead and is delayed; ticks of 1/(PREDIV_S+1) s. */
+    /* err > 0: local clock was ahead and is delayed; ticks of 1/(PREDIV_S+1) s;
+     * err is the error in ms, rounded (the correction itself is in ticks). */
     ARCLOG(ARCLOG_MOD_SYNC, VLEVEL_M, "RTC_SHIFT", "err=%d ticks=%u res=%s",
-           (int)error_ms, (unsigned)shift_ticks, res);
+           (int)SyncStamp_UsToMs(err_us), (unsigned)shift_ticks, res);
 }
 
 /* Atomic RTC snapshot hook: called at Sync Phase entry (C3/C2 TX epoch

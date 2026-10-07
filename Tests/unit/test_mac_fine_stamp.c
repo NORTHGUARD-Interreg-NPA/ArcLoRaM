@@ -33,8 +33,13 @@ static void stub_snapshot(uint32_t *ms, uint8_t *d, uint8_t *mo, uint8_t *y)
 }
 static void stub_sample(int32_t err_us) { s_samples++; s_last_sample = err_us; }
 
+static int     s_aligns;
+static int32_t s_last_align;
+static void stub_align(int32_t err_us) { s_aligns++; s_last_align = err_us; }
+
 static const MAC_Hooks_t k_hooks = {
     .rtc_set = stub_rtc_set, .get_rtc_snapshot = stub_snapshot, .sync_sample = stub_sample,
+    .rtc_align_subsecond = stub_align,
 };
 
 static SyncPayload_t pkt(uint8_t cell)
@@ -60,6 +65,7 @@ static void warm(void)
 void setUp(void)
 {
     s_rtc_sets = 0; s_samples = 0; s_last_sample = 0; s_snapshot_ms = 0u;
+    s_aligns = 0; s_last_align = 0;
     MAC_Init(&k_hooks);
     ArcLog_CaptureReset();
 }
@@ -164,9 +170,31 @@ void test_the_ms_entry_point_still_works(void)
     TEST_ASSERT_ARCLOG("act=t1");
 }
 
+/* The phase is corrected from SYNC_CORRECT_THRESHOLD_MS (1 ms), and below it the
+ * clock is left alone so as not to chase the noise of the stamp. 4 ticks late is
+ * 976.6 us (977): no correction. 5 ticks is 1220.7 us (1221): corrected, with the
+ * error in us, and the same early. Both are still under the 8 ms of Tier 1. */
+void test_the_correction_starts_between_4_and_5_ticks(void)
+{
+    warm();
+    s_aligns = 0;
+    SyncPayload_t p = pkt(3u);
+    MAC_OnSyncPacketReceivedTicks(&p, 3u * CELL_TICKS + 4u);
+    TEST_ASSERT_EQUAL_INT(0, s_aligns);
+    p = pkt(4u);
+    MAC_OnSyncPacketReceivedTicks(&p, 4u * CELL_TICKS + 5u);
+    TEST_ASSERT_EQUAL_INT(1, s_aligns);
+    TEST_ASSERT_EQUAL_INT32(1221, s_last_align);
+    p = pkt(5u);
+    MAC_OnSyncPacketReceivedTicks(&p, 5u * CELL_TICKS - 5u);
+    TEST_ASSERT_EQUAL_INT(2, s_aligns);
+    TEST_ASSERT_EQUAL_INT32(-1221, s_last_align);
+}
+
 int main(void)
 {
     UNITY_BEGIN();
+    RUN_TEST(test_the_correction_starts_between_4_and_5_ticks);
     RUN_TEST(test_sync_rx_logs_the_error_in_us_beside_the_ms);
     RUN_TEST(test_an_early_stamp_is_a_negative_error);
     RUN_TEST(test_tier1_ends_between_32_and_33_ticks);

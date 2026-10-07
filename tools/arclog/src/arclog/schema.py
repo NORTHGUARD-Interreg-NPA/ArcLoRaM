@@ -107,11 +107,16 @@ EVENTS: dict[str, Event] = {
     ),
     "RX_WIN": Event(
         "T",
-        ("last", "cap"),
-        "Synced Rx window opened: last = latest packet start (slot end + max guard - ToA), "
-        "cap = hard end (slot end + max guard).",
+        ("last", "cap", "g", "win"),
+        "Synced Rx window opened: last = latest packet start (CLOCK_WARM: nominal + g; "
+        "while acquiring: slot end + max guard - ToA), cap = hard end (slot end + max guard), "
+        "g = the guard used (ms: the cap while acquiring or without a valid drift estimate, #36), "
+        "win = last - now, the span handed to the radio (the platform adds the preamble margin).",
     ),
-    "RX_LATE": Event("T", ("now", "last"), "Woke after the latest packet start: no Rx window opened."),
+    "RX_LATE": Event(
+        "T", ("now", "last", "g"),
+        "Woke after the latest packet start: no Rx window opened. g = the guard (ms) of the slot.",
+    ),
     "WAKE_ADJ": Event(
         "T", ("from", "to"),
         "Next wake re-decided at Rx end (e.g. guard replaced by the Tx lead: next Sync cell became Tx).",

@@ -1,0 +1,51 @@
+# Purpose: acceptance. Issue #36, Test Record docs/test-tracker/36-guard-from-drift.md.
+# C3 (Node 5) + C2 (Node 2), NUCLEO Clock. A C2 in CLOCK_WARM closes an empty Rx
+# window one guard after nominal, not at the latest packet start the slot
+# geometry allows (about 1.97 s of listening). The drift estimate is not valid
+# yet (about 33 min of packets on the DEV profile), so the guard is the cap,
+# 100 ms: the window runs from nominal - 100 to nominal + 100, 200 ms, and RX_WIN
+# carries g and win. The DEV profile with the boot burst of 5 locks a cold C2 in
+# about a minute (ADR-0020); the windows of the cells 5 to 9 of the first phase,
+# where nobody transmits, are empty. While the C2 acquires its window is still
+# the geometric one (win near 1700), so the range below only matches WARM ones.
+description = "Guard: a WARM C2 closes an empty Rx window one guard after nominal"
+timeout = "8m"
+
+[nodes]
+5 = "C3"
+2 = "C2"
+
+[overrides]
+SYNC_BOOT_BURST = "5u"
+
+[[expect]]
+node = 5
+event = "SYNC_TX"
+
+[[expect]]
+node = 2
+event = "CLK"
+where = { to = "WARM" }
+within = "4m"
+
+[[expect]]
+node = 2
+event = "RX_WIN"
+where = { g = 100, win = { min = 150, max = 200 } }
+count = 3
+within = "7m"
+
+[[forbid]]
+event = "TX_DENIED"
+
+[[forbid]]
+event = "TX_LATE"
+
+[[forbid]]
+event = "RX_LATE"
+
+[[forbid]]
+event = "SYNC_SILENCE"
+
+[[forbid]]
+event = "SLOT_SUSPECT"

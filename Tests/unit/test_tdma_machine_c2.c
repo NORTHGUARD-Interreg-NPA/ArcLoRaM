@@ -6,6 +6,7 @@
 #include "shared_mem.h"
 #include "tdma_table.h"
 #include "arclog_capture.h"
+#include "stub_drift_estimator.h"
 #include <string.h>
 #include <stdint.h>
 
@@ -141,6 +142,7 @@ static void init_all(void)
     s_mac_snapshot_ms     = 0u;
     s_mac_rtc_set_calls   = 0;
     s_mac_hooks.sync_bootstrapped = NULL;  /* default: no bootstrap hook */
+    StubDriftEstimator_Reset();            /* default: estimate not valid, guard = cap */
     ArcLog_CaptureReset();
 
     /* Static 868.1 MHz on both Sync phases (cell mode STATIC) */
@@ -892,6 +894,121 @@ void test_bootstrap_just_before_midnight_wakes_before_it(void)
     TEST_ASSERT_EQUAL(3050u - MAX_GUARD_TIME_MS, s_alarm_programmed);
 }
 
+/* =========================================================================
+ * Guard from the drift estimate (issue #36)
+ * ========================================================================= */
+
+/* An estimate as the estimator reports it: valid, with this residual and noise. */
+static DriftEstimate_t valid_est(int32_t residual_ppb, uint32_t noise_us)
+{
+    DriftEstimate_t e = { true, 0, residual_ppb, noise_us, 40u, 1800u };
+    return e;
+}
+
+/* CLOCK_WARM with a valid estimate: the window ends one guard after nominal,
+ * not at the latest start the slot geometry allows. This estimate (360 ppb,
+ * 106 us) is worth 5 ms by the formula, so the 8 ms floor of the Tier 1 band
+ * sets the guard. Slot at T0 = 20, woken at 0: last = 20 + 8. The cap, the
+ * hard end of the slot, does not move. */
+void test_warm_window_ends_one_guard_after_nominal(void)
+{
+    sync_mac();
+    StubDriftEstimator_Set(valid_est(360, 106u));
+    s_rtc_ms = 0u;
+    start_chain();
+    ArcLog_CaptureReset();
+    TdmaMachine_SlotTask();
+    TEST_ASSERT_EQUAL(1, s_radio_set_rx_calls);
+    TEST_ASSERT_EQUAL(T0 + 8u, s_rx_start_window_ms);
+    TEST_ASSERT_EQUAL(T0 + WIN_CAP_MS, s_rx_cap_ms);
+}
+
+/* The early wake for an Rx slot is one guard before nominal. A valid estimate
+ * with 2 ms of noise is worth 3 x (3 x 2000 + 245 + 1000) = 21.7 ms, so 22 ms
+ * (a drift-free residual keeps the age out of it): cell 1 starts at 3020 and
+ * the node wakes at 2998, not at 2920 as with the 100 ms cap. */
+void test_the_early_wake_is_one_guard_before_nominal(void)
+{
+    sync_mac();
+    StubDriftEstimator_Set(valid_est(0, 2000u));
+    s_rtc_ms = 0u;
+    start_chain();
+    TdmaMachine_SlotTask();
+    TEST_ASSERT_EQUAL(T0 + SLOT_STEP_MS - 22u, s_alarm_programmed);
+}
+
+/* The estimate survives a re-acquisition, but a node whose clock was just set
+ * from Packet 1 does not know yet that it is locked: while acquiring, the guard
+ * stays the cap and the window keeps the geometric end, whatever the estimate
+ * says (22 ms here). */
+void test_acquiring_keeps_the_maximum_guard_whatever_the_estimate(void)
+{
+    StubDriftEstimator_Set(valid_est(0, 2000u));
+    s_rtc_ms = 0u;
+    start_chain();                    /* a cold MAC is taken to CLOCK_ACQUIRING */
+    TEST_ASSERT_EQUAL(CLOCK_ACQUIRING, MAC_GetClockState());
+    TdmaMachine_SlotTask();
+    TEST_ASSERT_EQUAL(T0 + SLOT_STEP_MS - MAX_GUARD_TIME_MS, s_alarm_programmed);
+    TEST_ASSERT_EQUAL(T0 + WIN_LAST_MS, s_rx_start_window_ms);
+}
+
+/* The drift grows with the time since the last Sync reception, which the MAC
+ * knows. The last packet was stamped at 6000 (sync_mac); the slot starts at
+ * 546 000, 540 s later. With 5 ppm of residual and 106 us of noise that is
+ * 13 ms (the PROD-period case of the guard policy), so the window ends at
+ * 546 000 + 13 and, woken at 545 980, stays open for 33 ms. With the age
+ * ignored the guard would be the 8 ms floor, and the window 28 ms. */
+void test_the_guard_grows_with_the_time_since_the_last_sync(void)
+{
+    sync_mac();
+    StubDriftEstimator_Set(valid_est(5000, 106u));
+    s_rtc_ms = 546000u - T0;
+    start_chain();
+    TdmaMachine_SlotTask();
+    TEST_ASSERT_EQUAL(1, s_radio_set_rx_calls);
+    TEST_ASSERT_EQUAL(T0 + 13u, s_rx_start_window_ms);
+}
+
+/* The trace says what each Rx window used, so that a report can give the guard
+ * distribution and tell a mistimed loss from a radio one: g, the guard in ms,
+ * and win, the span handed to the radio (the latest packet start, from the wake;
+ * the platform adds the preamble margin). WARM, the 8 ms floor, woken at 0 for
+ * a slot at 20: last = 28, win = 28. */
+void test_rx_win_logs_the_guard_and_the_window_when_warm(void)
+{
+    sync_mac();
+    StubDriftEstimator_Set(valid_est(360, 106u));
+    s_rtc_ms = 0u;
+    start_chain();
+    ArcLog_CaptureReset();
+    TdmaMachine_SlotTask();
+    TEST_ASSERT_ARCLOG("RX_WIN last=28 cap=2620 g=8 win=28");
+}
+
+/* While acquiring the guard is the cap and the window the geometric one:
+ * last = 20 + 2500 + 100 - 991 = 1629, win = 1629 from a wake at 0. */
+void test_rx_win_logs_the_cap_as_guard_while_acquiring(void)
+{
+    s_rtc_ms = 0u;
+    start_chain();
+    ArcLog_CaptureReset();
+    TdmaMachine_SlotTask();
+    TEST_ASSERT_ARCLOG("RX_WIN last=1629 cap=2620 g=100 win=1629");
+}
+
+/* A wake too late for any packet to fit logs the guard too, so every Rx wake
+ * has one. The ToA (20 + 2600 + 1 = 2621 ms) exceeds the slot: with the cap at
+ * 2620, last = 2620 - 2621 = -1, a day-wrapped 86399999. */
+void test_rx_late_logs_the_guard(void)
+{
+    s_toa_ms = T0 + WIN_CAP_MS + 1u;
+    s_rtc_ms = 0u;
+    start_chain();
+    ArcLog_CaptureReset();
+    TdmaMachine_SlotTask();
+    TEST_ASSERT_ARCLOG("RX_LATE now=0 last=86399999 g=100");
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -952,5 +1069,12 @@ int main(void)
     RUN_TEST(test_bootstrap_alarm_uses_nominal_not_readback);
     RUN_TEST(test_chain_runs_across_midnight);
     RUN_TEST(test_bootstrap_just_before_midnight_wakes_before_it);
+    RUN_TEST(test_warm_window_ends_one_guard_after_nominal);
+    RUN_TEST(test_the_early_wake_is_one_guard_before_nominal);
+    RUN_TEST(test_acquiring_keeps_the_maximum_guard_whatever_the_estimate);
+    RUN_TEST(test_the_guard_grows_with_the_time_since_the_last_sync);
+    RUN_TEST(test_rx_win_logs_the_guard_and_the_window_when_warm);
+    RUN_TEST(test_rx_win_logs_the_cap_as_guard_while_acquiring);
+    RUN_TEST(test_rx_late_logs_the_guard);
     return UNITY_END();
 }

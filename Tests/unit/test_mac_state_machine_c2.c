@@ -1123,26 +1123,32 @@ void test_c2_silence_timeout_spans_midnight(void)
     TEST_ASSERT_EQUAL(1, s_sync_lost_calls);
 }
 
-static uint32_t s_align_stamp_ms;
-static uint32_t s_align_expected_ms;
-static void stub_rtc_align_subsecond(uint32_t stamp_ms, uint32_t expected_ms)
+static int32_t s_align_err_us;
+static int     s_align_calls;
+static void stub_rtc_align_subsecond(int32_t err_us)
 {
-    s_align_stamp_ms    = stamp_ms;
-    s_align_expected_ms = expected_ms;
+    s_align_err_us = err_us;
+    s_align_calls++;
 }
 
-void test_c2_tier2_after_midnight_passes_day_domain_expected(void)
+/* The shift hook gets the error in microseconds, as logged in SYNC_RX erru, not
+ * a pair of whole-ms times: a correction near 1 ms is not lost to the rounding.
+ * After midnight it is the short way round the day, not a day-wrapped number.
+ * A packet 50 ms late is stamped at 3050 ms = 12 493 ticks (the first tick not
+ * before it), and (12 493 x 1000 - 3000 x 4096) x 125 / 512 = 50 049 us. */
+void test_c2_tier2_after_midnight_passes_the_error_in_us(void)
 {
     MAC_Hooks_t hooks = k_hooks;
     hooks.rtc_align_subsecond = stub_rtc_align_subsecond;
     MAC_Init(&hooks);
+    s_align_calls = 0;
     sync_mac_across_midnight();
 
     SyncPayload_t p;
     make_sync_pkt(&p, 3u, EP_BEFORE_MIDNIGHT);    /* due at 00:00:03 */
     MAC_OnSyncPacketReceived(&p, 3050u);           /* 50 ms late: Tier 2 */
-    TEST_ASSERT_EQUAL(3050u, s_align_stamp_ms);
-    TEST_ASSERT_EQUAL(3000u, s_align_expected_ms);
+    TEST_ASSERT_EQUAL(1, s_align_calls);
+    TEST_ASSERT_EQUAL_INT32(50049, s_align_err_us);
 }
 
 /* ------- drift sample hook (issue #34) ------------------------------------ */
@@ -1158,9 +1164,9 @@ static void stub_sync_sample(int32_t err_ms)
     s_sample_n++;
 }
 
-static void stub_align_for_sample(uint32_t stamp_ms, uint32_t expected_ms)
+static void stub_align_for_sample(int32_t err_us)
 {
-    (void)stamp_ms; (void)expected_ms;
+    (void)err_us;
     s_sample_order_at_align = s_sample_n;
     s_align_calls_seen++;
 }
@@ -1250,6 +1256,36 @@ void test_c2_sample_hook_runs_before_the_tier2_shift(void)
     sample_pkt(&p, 3u); MAC_OnSyncPacketReceived(&p, 9040u);    /* t2 */
     TEST_ASSERT_EQUAL(1, s_align_calls_seen);
     TEST_ASSERT_EQUAL(1, s_sample_order_at_align);
+}
+
+/* ------- the bands of CLOCK_WARM (issue #36) ------------------------------ */
+
+/* Two thresholds, apart: SYNC_CORRECT_THRESHOLD_MS (1 ms) is where the phase is
+ * corrected, SYNC_PARTICIPATE_THRESHOLD_MS (8 ms) is where a node stops being
+ * relayed. Between them a packet is corrected and still relays. */
+static void warm_with_align_hook(void)
+{
+    MAC_Hooks_t hooks = k_hooks;
+    hooks.rtc_align_subsecond = stub_rtc_align_subsecond;
+    MAC_Init(&hooks);
+    s_align_calls = 0;
+    s_snapshot_ms = 0u;
+    SyncPayload_t p;
+    sample_pkt(&p, 0u); MAC_OnSyncPacketReceived(&p, 0u);
+    sample_pkt(&p, 1u); MAC_OnSyncPacketReceived(&p, 3000u);
+    sample_pkt(&p, 2u); MAC_OnSyncPacketReceived(&p, 6000u);
+    TEST_ASSERT_EQUAL(CLOCK_WARM, MAC_GetClockState());
+}
+
+void test_c2_a_5_ms_error_is_corrected_and_still_relays(void)
+{
+    warm_with_align_hook();
+    SyncPayload_t p;
+    sample_pkt(&p, 3u);
+    MAC_OnSyncPacketReceived(&p, 9005u);                  /* 5 ms late */
+    TEST_ASSERT_EQUAL(1, s_align_calls);
+    TEST_ASSERT_INT32_WITHIN(250, 5000, s_align_err_us);
+    TEST_ASSERT_TRUE(MAC_GetEpochReceivedThisPhase());    /* it relays */
 }
 
 void test_c2_no_sample_hook_is_fine(void)
@@ -1342,7 +1378,7 @@ int main(void)
     RUN_TEST(test_c2_warm_packet_early_before_midnight_has_negative_error);
     RUN_TEST(test_c2_packet1_after_midnight_bootstraps_in_day_domain);
     RUN_TEST(test_c2_silence_timeout_spans_midnight);
-    RUN_TEST(test_c2_tier2_after_midnight_passes_day_domain_expected);
+    RUN_TEST(test_c2_tier2_after_midnight_passes_the_error_in_us);
     RUN_TEST(test_c2_cold_set_in_the_epoch_day_keeps_the_date);
     RUN_TEST(test_c2_cold_set_on_a_cell_after_midnight_advances_the_date);
     RUN_TEST(test_c2_cold_set_on_a_cell_before_midnight_keeps_the_date);
@@ -1352,6 +1388,7 @@ int main(void)
     RUN_TEST(test_c2_sample_hook_not_called_for_a_bad_acquiring_packet);
     RUN_TEST(test_c2_sample_hook_called_for_tier1_and_tier2_not_tier3);
     RUN_TEST(test_c2_sample_hook_runs_before_the_tier2_shift);
+    RUN_TEST(test_c2_a_5_ms_error_is_corrected_and_still_relays);
     RUN_TEST(test_c2_no_sample_hook_is_fine);
     return UNITY_END();
 }

@@ -153,6 +153,25 @@ add_unity_test(test_calr_policy
     test_calr_policy.c
 )
 
+# The formula of the guard is tested with the Rx start latency pinned to 0, so that its
+# hand-worked values do not move with the measured latency; the default latency is
+# pinned by test_guard_policy_default, and where the latency enters by _latency.
+add_unity_test(test_guard_policy
+    test_guard_policy.c
+)
+target_compile_definitions(test_guard_policy PRIVATE GUARD_RX_START_LATENCY_US=0u)
+
+# The constants as they ship, the measured Rx start latency included.
+add_unity_test(test_guard_policy_default
+    test_guard_policy_default.c
+)
+
+# This build gives the Rx start latency another value, to pin where it enters.
+add_unity_test(test_guard_policy_latency
+    test_guard_policy_latency.c
+)
+target_compile_definitions(test_guard_policy_latency PRIVATE GUARD_RX_START_LATENCY_US=2000u)
+
 add_unity_test(test_drift_estimator
     test_drift_estimator.c
     ../../CM0PLUS/SubGHz_Phy/Logic/drift_estimator.c
@@ -198,6 +217,7 @@ add_unity_test(test_mac_state_machine_c3
 
 add_unity_test(test_tdma_machine_c2
     test_tdma_machine_c2.c
+    stub_drift_estimator.c
     ../../CM0PLUS/SubGHz_Phy/Logic/tdma_machine.c
     ../../CM0PLUS/SubGHz_Phy/Logic/mac_state_machine_c2.c
     ../../CM0PLUS/SubGHz_Phy/Logic/freq_resolver.c
@@ -206,10 +226,11 @@ add_unity_test(test_tdma_machine_c2
     ../../Common/Protocol/tdma_table.c
     ../../Common/SharedMemory/shared_mem.c
 )
-target_compile_definitions(test_tdma_machine_c2 PRIVATE NODE_CLASS=2)
+target_compile_definitions(test_tdma_machine_c2 PRIVATE NODE_CLASS=2 GUARD_RX_START_LATENCY_US=0u)
 
 add_unity_test(test_tdma_machine_c1
     test_tdma_machine_c1.c
+    stub_drift_estimator.c
     ../../CM0PLUS/SubGHz_Phy/Logic/tdma_machine.c
     ../../CM0PLUS/SubGHz_Phy/Logic/mac_state_machine_c1.c
     ../../CM0PLUS/SubGHz_Phy/Logic/freq_resolver.c
@@ -222,6 +243,7 @@ target_compile_definitions(test_tdma_machine_c1 PRIVATE NODE_CLASS=1)
 
 add_unity_test(test_tdma_machine_c2_2sync
     test_tdma_machine_c2_2sync.c
+    stub_drift_estimator.c
     stub_tdma_table_2sync.c
     ../../CM0PLUS/SubGHz_Phy/Logic/tdma_machine.c
     ../../CM0PLUS/SubGHz_Phy/Logic/mac_state_machine_c2.c
@@ -231,6 +253,20 @@ add_unity_test(test_tdma_machine_c2_2sync
     ../../Common/SharedMemory/shared_mem.c
 )
 target_compile_definitions(test_tdma_machine_c2_2sync PRIVATE NODE_CLASS=2)
+
+# The Rx guard outside the Sync phase: a peer sender, and a contention slot (issue #36).
+add_unity_test(test_tdma_machine_c2_phases
+    test_tdma_machine_c2_phases.c
+    stub_drift_estimator.c
+    stub_tdma_table_contention.c
+    ../../CM0PLUS/SubGHz_Phy/Logic/tdma_machine.c
+    ../../CM0PLUS/SubGHz_Phy/Logic/mac_state_machine_c2.c
+    ../../CM0PLUS/SubGHz_Phy/Logic/freq_resolver.c
+    ../../CM0PLUS/SubGHz_Phy/Logic/compliance_engine.c
+    ../../CM0PLUS/SubGHz_Phy/Logic/guard_time_resolver.c
+    ../../Common/SharedMemory/shared_mem.c
+)
+target_compile_definitions(test_tdma_machine_c2_phases PRIVATE NODE_CLASS=2 GUARD_RX_START_LATENCY_US=0u)
 
 add_unity_test(test_tdma_machine_c3
     test_tdma_machine_c3.c

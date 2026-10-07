@@ -24,6 +24,7 @@
 #include "mac_types.h"
 #include "arclog.h"
 #include "day_ms.h"
+#include "probe.h"               /* PROBE_* (BENCH_PROBE only) */
 #include <stddef.h>
 #include <string.h>
 
@@ -188,31 +189,67 @@ static void enter_scanning(const char *why)
     s_platform.RadioScan();
 }
 
+/* A CONTENTION anchor slot (the Cluster_Exchange footer): any node may send
+ * after channel sensing and a random backoff, so its packet does not start at
+ * nominal and the window cannot close one guard after it. */
+static bool slot_is_contention(const Phase_t *phase)
+{
+    if (s_cursor.slot_pos == SLOT_POS_HEADER) {
+        return phase->header.kind == SLOT_CONTENTION;
+    }
+    if (s_cursor.slot_pos == SLOT_POS_FOOTER) {
+        return phase->footer.kind == SLOT_CONTENTION;
+    }
+    return false;
+}
+
 /* Open the Rx window of the current slot, from now (early wake, guard
- * applied) until the latest instant a packet can start and still end by
- * slot end + MAX_GUARD_TIME_MS. All times are in the RTC day domain. Gaps
- * are >= 2 x MAX_GUARD_TIME_MS, so a packet ending by then never reaches the
- * next slot, whatever guard its receivers apply. The expected packet is the Sync packet in every slot for
- * now (issue #38). The platform aborts any reception still running at that
- * end (cap), e.g. after a false preamble detection. */
+ * applied) until the latest instant a packet can start. All times are in the
+ * RTC day domain.
+ *
+ * Acquiring, that is the latest start that still ends by slot end +
+ * MAX_GUARD_TIME_MS: gaps are >= 2 x MAX_GUARD_TIME_MS, so a packet ending by
+ * then never reaches the next slot, whatever guard its receivers apply. In
+ * CLOCK_WARM every packet starts at nominal (ADR-0016), so one can only be late
+ * by clock error: the window closes one guard after nominal instead. The
+ * expected packet is the Sync packet in every slot for now (issue #38). The
+ * platform aborts any reception still running at the cap (slot end +
+ * MAX_GUARD_TIME_MS), e.g. after a false preamble detection.
+ *
+ * The trace gives the guard used (g) and the span handed to the radio (win),
+ * so that a report can tell a mistimed loss from a radio one. */
 static void open_rx_window(const Phase_t *phase, uint32_t now_ms)
 {
-    uint32_t cap_ms  = DayMs_Add(s_slot_start_ms,
-                                 (int32_t)(phase->slot_active_ms + MAX_GUARD_TIME_MS));
-    uint32_t toa_ms  = s_platform.RadioTimeOnAir((uint8_t)sizeof(SyncPayload_t));
-    uint32_t last_ms = DayMs_Add(cap_ms, -(int32_t)toa_ms);
+    PROBE_START(win);   /* issue #36: the window's own share of the Rx start latency */
+    uint32_t cap_ms   = DayMs_Add(s_slot_start_ms,
+                                  (int32_t)(phase->slot_active_ms + MAX_GUARD_TIME_MS));
+    uint32_t toa_ms   = s_platform.RadioTimeOnAir((uint8_t)sizeof(SyncPayload_t));
+    uint32_t last_ms  = DayMs_Add(cap_ms, -(int32_t)toa_ms);
+    uint32_t guard_ms = GuardTimeResolver_GetGuardMs(s_slot_start_ms,
+                                                     phase->type == PHASE_TYPE_SYNC);
+
+    if (MAC_GetClockState() == CLOCK_WARM && !slot_is_contention(phase)) {
+        uint32_t warm_ms = DayMs_Add(s_slot_start_ms, (int32_t)guard_ms);
+        if (DayMs_Diff(warm_ms, last_ms) < 0) {
+            last_ms = warm_ms;
+        }
+    }
 
     if (DayMs_Diff(last_ms, now_ms) <= 0) {
         /* Woke too late for any packet to fit (or ToA exceeds the slot). */
-        ARCLOG(ARCLOG_MOD_TDMA, VLEVEL_L, "RX_LATE", "now=%u last=%u",
-               (unsigned)now_ms, (unsigned)last_ms);
+        ARCLOG(ARCLOG_MOD_TDMA, VLEVEL_L, "RX_LATE", "now=%u last=%u g=%u",
+               (unsigned)now_ms, (unsigned)last_ms, (unsigned)guard_ms);
         s_platform.RadioSleep();
         return;
     }
-    ARCLOG(ARCLOG_MOD_TDMA, VLEVEL_H, "RX_WIN", "last=%u cap=%u",
-           (unsigned)last_ms, (unsigned)cap_ms);
-    s_platform.RadioSetRx((uint32_t)DayMs_Diff(last_ms, now_ms),
-                          (uint32_t)DayMs_Diff(cap_ms, now_ms));
+    uint32_t win_ms = (uint32_t)DayMs_Diff(last_ms, now_ms);
+    PROBE_MARK(win, "guard");
+    ARCLOG(ARCLOG_MOD_TDMA, VLEVEL_H, "RX_WIN", "last=%u cap=%u g=%u win=%u",
+           (unsigned)last_ms, (unsigned)cap_ms, (unsigned)guard_ms, (unsigned)win_ms);
+    PROBE_MARK(win, "log");
+    s_platform.RadioSetRx(win_ms, (uint32_t)DayMs_Diff(cap_ms, now_ms));
+    PROBE_MARK(win, "setrx");
+    PROBE_LOG(win, "rx_open");
 }
 
 /* Transmit in the current slot: the packet starts on air exactly at the
@@ -278,7 +315,9 @@ static uint32_t next_wake_ms(void)
 {
     const Phase_t *next_phase = TdmaTable_GetPhase(s_cursor.phase_index);
     if (next_phase != NULL && next_slot_is_rx(next_phase)) {
-        return DayMs_Add(s_slot_start_ms, -(int32_t)GuardTimeResolver_GetGuardMs());
+        return DayMs_Add(s_slot_start_ms,
+                         -(int32_t)GuardTimeResolver_GetGuardMs(s_slot_start_ms,
+                                                             next_phase->type == PHASE_TYPE_SYNC));
     }
     return DayMs_Add(s_slot_start_ms, -(int32_t)TX_LEAD_MS);
 }
@@ -422,6 +461,10 @@ void TdmaMachine_SlotTask(void)
      * alarm's task was pending. Leave the scanning radio alone. */
     if (!s_running) return;
 
+    /* Rx start latency (issue #36): the CPU path from the slot task to the radio
+     * armed in Rx. The wake before it (alarm to this task) is the `wake` of SLOT. */
+    PROBE_START(slot);
+
     /* ---- Step 1: read RTC ---- */
     s_bootstrapped_in_slot = false;
     now_ms = s_platform.GetRtcMs();
@@ -489,6 +532,7 @@ void TdmaMachine_SlotTask(void)
     /* ---- Step 5-6: frequency and channel ---- */
     freq_hz = FrequencyResolver_GetFreq(&s_cursor);
     s_platform.RadioSetChannel(freq_hz);
+    PROBE_MARK(slot, "chan");
 
     /* ---- Step 6.5: sync silence timeout check ---- */
     MAC_CheckSyncTimeout(now_ms);
@@ -499,6 +543,7 @@ void TdmaMachine_SlotTask(void)
 
     /* ---- Step 7: MAC decision ---- */
     decision = MAC_OnSlotOpportunity(&s_cursor, phase, s_slot_start_ms);
+    PROBE_MARK(slot, "dec");
     /* wake = actual minus programmed wake time: local timing deviation. */
     ARCLOG(ARCLOG_MOD_TDMA, VLEVEL_H, "SLOT",
            "ph=%u ty=%s ce=%u sl=%u pos=%s dec=%s wake=%d nom=%u",
@@ -507,6 +552,7 @@ void TdmaMachine_SlotTask(void)
            ArcLog_SlotPosName(s_cursor.slot_pos), ArcLog_DecisionName(decision),
            (int)DayMs_Diff(now_ms, s_expected_wake_ms),
            (unsigned)s_slot_start_ms);
+    PROBE_MARK(slot, "slotlog");
 
     /* ---- Step 8: radio action ---- */
     if (decision == SLOT_TX) {
@@ -527,6 +573,7 @@ void TdmaMachine_SlotTask(void)
     alarm_ms = next_wake_ms();
     s_expected_wake_ms = alarm_ms;
     s_platform.ProgramAlarmA(alarm_ms);
+    PROBE_LOG(slot, "rx_slot");   /* after the timed path: a log costs time of its own */
 }
 
 void TdmaMachine_BootstrapFromSync(uint8_t  sync_phase_idx,
@@ -550,7 +597,9 @@ void TdmaMachine_BootstrapFromSync(uint8_t  sync_phase_idx,
 
         /* Apply guard: the next slot will be Rx (acquisition packets 2+),
          * so wake early to open the window before nominal start. */
-        s_expected_wake_ms = DayMs_Add(next_ms, -(int32_t)GuardTimeResolver_GetGuardMs());
+        s_expected_wake_ms = DayMs_Add(next_ms,
+                                       -(int32_t)GuardTimeResolver_GetGuardMs(next_ms,
+                                                                           phase->type == PHASE_TYPE_SYNC));
         s_platform.ProgramAlarmA(s_expected_wake_ms);
         s_bootstrapped_in_slot = true;
         s_running              = true;

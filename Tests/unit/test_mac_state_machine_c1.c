@@ -564,9 +564,9 @@ static void stub_sync_sample(int32_t err_ms)
     s_sample_n++;
 }
 
-static void stub_align_for_sample(uint32_t stamp_ms, uint32_t expected_ms)
+static void stub_align_for_sample(int32_t err_us)
 {
-    (void)stamp_ms; (void)expected_ms;
+    (void)err_us;
     s_sample_order_at_align = s_sample_n;
     s_align_calls_seen++;
 }

@@ -138,20 +138,21 @@ typedef struct {
                     uint8_t  day, uint8_t month, uint8_t year);
 
     /*!
-     * Tier 2 drift correction hook — CLOCK_WARM,
-     * SYNC_PARTICIPATE_THRESHOLD_MS ≤ error < SYNC_RESYNC_THRESHOLD_MS.
+     * Phase correction hook — CLOCK_WARM,
+     * SYNC_CORRECT_THRESHOLD_MS ≤ error < SYNC_RESYNC_THRESHOLD_MS.
      *
      * \details Applies HAL_RTCEx_SetSynchroShift without a full calendar
      *          re-anchor. Must not block. Called only from
-     *          \ref MAC_OnSyncPacketReceived. Relay is suppressed for this
-     *          sync occurrence regardless of the return path.
+     *          \ref MAC_OnSyncPacketReceivedTicks. Below
+     *          SYNC_PARTICIPATE_THRESHOLD_MS the packet is still relayed;
+     *          from there up, relay is suppressed for this sync occurrence.
      *
-     * \param stamp_ms            SyncStamp (GetTimerTicks domain).
-     * \param expected_offset_ms  ms_since_midnight_sync_phase +
-     *                            sync_cell_index × per_cell_ms.
+     * \param err_us  SyncStamp - expected arrival, microseconds, signed (a
+     *                positive error means the local clock is ahead and is
+     *                delayed), as logged in SYNC_RX `erru`: a correction near
+     *                1 ms must not be lost to a whole-ms rounding.
      */
-    void (*rtc_align_subsecond)(uint32_t stamp_ms,
-                                 uint32_t expected_offset_ms);
+    void (*rtc_align_subsecond)(int32_t err_us);
 
     /*!
      * Atomic snapshot of the current RTC time and date.
@@ -429,6 +430,20 @@ uint8_t MAC_GetSyncTxBudget(void);
  * \retval  uint32_t ms_since_midnight_sync_phase for the current occurrence.
  */
 uint32_t MAC_GetSyncPhaseEpochMs(void);
+
+/*!
+ * \brief   Return the instant of the last received Sync packet, RTC ms of the
+ *          day.
+ *
+ * \details C1 and C2: the stamp of the latest Sync packet of any tier, or the
+ *          RTC reading after the set when it was Packet 1: the instant the
+ *          silence timer counts from. The Guard Time Resolver measures the
+ *          drift the guard has to absorb from it (issue #36). C3: always 0, it
+ *          has no estimate and its guard is the cap.
+ *
+ * \retval  uint32_t RTC ms of the day of the last Sync packet.
+ */
+uint32_t MAC_GetLastSyncMs(void);
 
 /*!
  * \brief   Return the BCD date captured at Sync Phase entry.
