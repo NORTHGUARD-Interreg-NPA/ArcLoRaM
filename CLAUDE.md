@@ -16,7 +16,7 @@ In Claude Code, put the proposal of the next issue to Simon with AskUserQuestion
 
 ### Issue tracker
 
-Issues live in GitHub Issues (`github.com/ArcLoRaM/firmware`). See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues (`github.com/NORTHGUARD-Interreg-NPA/ArcLoRaM`). See `docs/agents/issue-tracker.md`.
 Always write an issue as its number and a condensed title ("#73 bench builds alternate ok/fail"), never the number alone: see "Naming issues" in `AGENTS.md`.
 
 ### Triage labels

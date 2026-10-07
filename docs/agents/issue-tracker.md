@@ -2,6 +2,14 @@
 
 Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
 
+## Where
+
+The tracker is `NORTHGUARD-Interreg-NPA/ArcLoRaM`, the repository `origin` points at; `gh repo set-default` pins it for `gh`.
+On 2026-10-07 every issue of `ArcLoRaM/firmware`, open and closed, was copied there with its number kept, so `#86` and every `#number` in the history, the docs and the Test Records mean the same issue.
+The numbers that repository spent on pull requests (#72, #74, #81) or lost (#84) are closed placeholder issues.
+A copied issue starts with a line saying who opened it in the old repository and when, and so does each comment, because GitHub cannot copy authors or dates.
+`ArcLoRaM/firmware` is no longer the tracker: do not file or comment there.
+
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
