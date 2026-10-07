@@ -94,6 +94,10 @@ BENCH_COLLECTOR_URL=<base URL of the collector> uv run --project tools/bench pyt
 ```
 
 - Exit 0 is a PASS, 1 a FAIL, 2 no verdict yet (nothing failed so far). It prints, per node, the lines, the last line and its age, the `BOOT`s and the `SLOT` count per hour.
+- Run it from a checkout at or before `f71773e` (the worktree `.claude/worktrees/node2-c3-swap`), not from a `main` that contains #36 "Rx guard from the drift estimate".
+  The judge reads the trace with the arclog schema of the checkout it runs in, and since #36 that schema requires `g` and `win` on `RX_WIN`; this build (`e34092f-o954ffd`) predates them and does not print them.
+  From such a `main` it reports `FAIL nuna-node-01 RX_WIN: missing g,win` at +134 s although nothing is wrong with the run (seen on 2026-10-08).
+  From the worktree, the same command at 22:22 UTC on 2026-10-07 gave every stage ok up to 1350 `SLOT` on both nodes and exit 2.
 - The collector writes each line's time in ISO 8601 with its offset (its first version wrote the Pi's local time, which `--pi-tz` still converts). The tool flags a Pi whose clock is not NTP-synchronised or lags the collector's by more than 5 s, and a node the collector has not heard from for over 10 min.
 - Since 2026-10-07 13:51Z the Pi buffers its lines and replays them to a collector that reconnects, so a collector restart is no longer invalid by itself: a FAIL on lost lines says whether the buffer was enough.
 - A FAIL on a `SLOT` stage is a node that stopped: read its Pi's `journalctl -u openocd` around the last line before anything resets it (criterion 2), then `bench reset <Node ID>`.
