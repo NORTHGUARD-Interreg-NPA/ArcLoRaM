@@ -24,8 +24,9 @@ A finding of 2026-10-07 (NUCLEO Clock) shows the correction matters.
 | `main` (`e34092f-o954ffd`, the swap soak) | none: a Tier 1 error is stored, not corrected | Node 5 as C2, 117 Tier 1 packets from 14:09 to 20:28 UTC: `erru` walks from +959 us to -4168 us (-0.22 ppm, a rate residual of -214 ppb below the 715 ppb `CALR` write threshold), 67 packets beyond 1 ms, no `RTC_SHIFT`. Run record `tools/arclog/runs/20261007T140655Z-e34092f-o954ffd-collector/`, the always-on capture `tools/arclog/runs/bench/nuna-node-01-20261007.log` |
 | `feat/36-rx-guard` (`dcfaeba-o954ffd`, the failed 6 h run) | a shift from 1 ms (`SYNC_CORRECT_THRESHOLD_MS`) | Node 2 as C2, 70 Tier 1 packets in 3 h 46 min: `erru` -750 to +1447 us, 2 `RTC_SHIFT`, the next packet after each at -750 us and -18 us. `tools/arclog/runs/20261005T224004Z-dcfaeba-o954ffd/` |
 
-Extrapolated from the soak trend, not measured: `erru` was -4412 us at 21:11 UTC on 2026-10-07, falling by 0.185 to 0.199 us per second (the estimator's rate is -199 ppb), so it reaches -8 ms between 02:10 and 02:35 UTC on 2026-10-08, around the end of the soak (02:13 UTC).
-The first Tier 2 packet (`act=t2`, no relay for that occurrence) may or may not fall inside the run: its trace settles it.
+Measured on the same soak (2026-10-08): `erru` kept walking at -0.2 ppm and crossed -8 ms at 02:11:51 UTC (-8074 us), where the first Tier 2 packet appeared (`act=t2`, one `RTC_SHIFT`, no relay for that occurrence).
+It was +471 us at 02:51 UTC and walking again, at -3436 us at 08:18 UTC.
+So without the correction from 1 ms a C2 sits between the Tier 2 correction and 8 ms, and the offset to its sender is only bounded by the 8 ms of Tier 1.
 
 ## Scenarios
 
