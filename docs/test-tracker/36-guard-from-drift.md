@@ -9,13 +9,13 @@ The clock is the NUCLEO Clock (CONTEXT.md): every figure of this record is a NUC
 | Scenario | Proves or measures |
 |---|---|
 | `tools/bench/scenarios/guard-warm-window.toml` | C3 (Node 5) + C2 (Node 2), DEV profile with the boot burst: a C2 in `CLOCK_WARM` closes an empty Rx window one guard after nominal. The estimate is not valid yet, so the guard is the cap: `RX_WIN g=100` with `win` in 150..200 ms, against about 1700 ms while acquiring; no `RX_LATE`, `SLOT_SUSPECT`, `TX_LATE`, `TX_DENIED` |
-| `tools/bench/scenarios/guard-from-drift.toml` | C3 (Node 5) + C2 (Node 2) for 6 h: every Sync packet the C3 sent (`TX_DONE`) is received or lost for a radio reason, never because the C2's window was not open on it; the guard of every Rx slot is logged (`g`, `win`) and falls to about 10 ms once the estimate is valid; no Tier 3 or `SYNC_LOST`. Counts of locked packets are staged every 10 so that a silent node ends the run within one stage |
+| `tools/bench/scenarios/guard-from-drift.toml` | C3 (Node 5) + C2 (Node 2) for 6 h: every Sync packet the C3 sent (`TX_DONE`) is received or lost for a radio reason, never because the C2's window was not open on it; the guard of every Rx slot is logged (`g`, `win`) and falls to about 10 ms once the estimate is valid; no Tier 3 or `SYNC_LOST`. Counts of locked packets are staged every 10 so that a silent node ends the run within one stage. Run 2026-10-08: PASS at 5 h 30 min (see Runs) |
 | `tools/bench/scenarios/guard-from-drift-swapped.toml` | The same 6 h with the roles swapped (the C3 on Node 2, the C2 on Node 5), run after the first one stopped on a node silence of Node 2 as a C2 (`node-silences.md`, event 2): it tells the board from the role |
 | flags: `--node 5=C3 --node 2=C2 -D BENCH_PROBE=1 -D SYNC_BOOT_BURST=5u --expect "2 PROBE tag=rx_open seg=setrx count=4 within=5m"` | The Rx start latency (the part of it from the slot task to a radio that listens), measured with `timing-probe`; the wake part is the `wake` of `SLOT`. The probes stay in `tdma_machine.c` (`rx_slot`, `rx_open`) and compile to nothing without `BENCH_PROBE` |
 
 ## Hardware
 
-Checked against `bench boards` on 2026-10-05: 2 boards connected, with known Node IDs.
+Checked against `bench boards` on 2026-10-05 and again on 2026-10-08: 2 boards connected, with known Node IDs, both Pi Nodes.
 
 | Item | Needed | Today |
 |---|---|---|
@@ -76,6 +76,34 @@ The 3 h 46 min before the stop are data:
 The window shows g = 10 or 11 ms where this record said "10 ms for the NUCLEO pair": the noise of this pair is 250 to 111 us, against the 106 us of the first pair, and the formula gives 11 ms at 250 us.
 The criterion of the several-hour bench run stays open: it needs a PASS run.
 
+## Result: the 6 h run (2026-10-08 08:51 UTC), PASS at 5 h 30 min
+
+`guard-from-drift.toml`, build `77adecb-o954ffd` (`main` with the guard of #36), Node 5 as C3 on Pi Node `nuna-node-01` and Node 2 as C2 on `nuna-node-03`, DEV profile with the boot burst, NUCLEO Clock.
+`bench run` stopped at +40 min as invalid: the laptop's link to both Pi Nodes was cut on purpose (a test, 09:28:58 to 09:31:15 UTC, 137 s) and the capture lost lines.
+The nodes did not notice, and the log collector, a separate machine connected to both Pis since 2026-10-07 13:51 UTC, had every line (consecutive sequence numbers across the gap, no `BOOT`), so the same arming was judged from the collector with `python -m bench.collector` (with the `limit` of the collector's `/logs` lifted, #111): **PASS** at +19813.6 s, when the 100th locked packet arrived, with no warning of a gap or of lost lines.
+All figures are computed from that record, `tools/arclog/runs/20261008T085115Z-77adecb-o954ffd-collector/`.
+
+| | Until the verdict (14:21 UTC, C2 up 5 h 30 min) | Until the C2 stopped (9 h 50 min) | 2026-10-05 run, 3 h 46 min |
+|---|---|---|---|
+| Rate estimate valid (`DRIFT ok=1`) | +1413 s, 23.5 min (n = 10, baseline 1360 s) | same | +1412 s |
+| Guard (`RX_WIN g`), windows | 890: 62 at 100 ms (acquiring and until the estimate was valid), 745 at 10 ms, 83 at 11 ms | 1592: 62 at 100, 1447 at 10, 83 at 11 | 608: 62 at 100, 168 at 10, 375 at 11, 3 at 12 |
+| Empty window at the real guard, `RX_WIN` to `RX_TIMEOUT`, device clock | g = 10: median **286 ms** (284 to 294, n = 663); g = 11: **288 ms** (n = 70) | g = 10: **286 ms** (n = 1284); g = 11: 288 ms (n = 70) | g = 10: 286 ms (n = 150); g = 11: 288 ms (n = 331) |
+| Empty window at the cap (100 ms) | median 464 ms (462 to 472, n = 52) | same | n = 52, 464 ms |
+| Empty window before the change (builds up to `1aba9a2`) | median 1939 ms (n = 214) | | |
+| Sync packets of the C3 received by the C2, after the C2 was up | **103 of 103** | 181 of 181: the last one (`ph=1 ce=0 ep=35100032`) is not in the log, because the CM4 died before printing it; the C2's CM0+ received it, as its RAM shows (`RX_DONE` rssi -13 snr 8, `SYNC_RX act=t1`, `erru` 471) | 71 of 71 |
+| Locked packets (`act=t1`) and Sync error `erru` | 100; -262 to +1203 us, median +471 | 177; same range | 68; -750 to +1447 us |
+| `RTC_SHIFT` (the 1 to 8 ms band) | 2 | 4 | 2 |
+| Wake, `wake` of `SLOT`, Rx slots | 0 ms in 870 of 890, 2 ms in 20 | 0 ms in 1562 of 1592, 1 ms in 1, 2 ms in 29 | 0 ms in 593 of 609 |
+| Estimator at the end | `DRIFT n=48 base=9401 rate=-9401 resid=136 noise=114 ok=1 trim=0` | `noise=93` | `noise=111` |
+| Never seen | `RX_LATE`, `SLOT_SUSPECT`, `TX_LATE`, `TX_DENIED`, `SYNC_SILENCE`, `CLK to=COLD`, a Tier 3 packet | same | same |
+
+- An empty window listens 85 % less than before (286 ms against a median of 1939 ms), as predicted (2 x 10 + 262 = 282 ms).
+- Of the 1592 windows until the C2 stopped, 91 % have a guard of 10 ms and 5 % of 11 ms (the other 4 % are the 62 at the cap, before the estimate was valid): never above 11 ms with a valid estimate, under the 15 ms target of #46.
+  The estimate read a stamp noise of 62 to 142 us on this C2 (170 estimates) against 111 to 250 us in the run of 2026-10-05; the 11 ms windows follow estimates that read 134 to 142 us, which is why this run has 10 ms in nine windows out of ten where the earlier run had 11 ms in two out of three.
+- **Node 2 locked up at 18:41:28 UTC**, 9 h 50 min after the run was armed and 4 h 20 min after it had passed: a CM4 HardFault lockup (`node-silences.md`, event 4, with the register read).
+  It is outside the scenario's window, and it cost no packet: the C2's CM0+ went on receiving and relaying (its RAM holds the unprinted lines of the next two minutes, and its wake counter kept counting at its normal rate for the almost 4 h that followed); only the printing stopped.
+  The earlier run of 2026-10-05 stopped at 3 h 46 min for the same board and role (event 2); events 1 and 3 happened on `main` builds before the guard existed, and the swap soak without the guard ran 18 h with the roles swapped. The investigation is #101.
+
 ## Measurement: the Rx start latency (2026-10-05, `timing-probe`, Node 2 as C2, NUCLEO Clock)
 
 CM0+ at 4 MHz (`hz=4000000`), a C2 in the first minutes after a lock (the Rx slots of the DEV burst), build `a419c9b-db764f8-o9bf158` (`BENCH_PROBE=1`), run record `tools/arclog/runs/20261005T175430Z-a419c9b-db764f8-o9bf158/`, n = 4 Rx slots.
@@ -115,8 +143,8 @@ A packet that starts well before the window opens is not tested (the radio joine
 - [x] Rx start latency measured with `timing-probe` and recorded here. (4.14 to 4.50 ms without the log lines, 14.5 to 14.8 ms with them; the constant is 5000 us; see Measurement)
 - [x] `g` and `win` in the trace and the schema; schema test passes. (`test_tdma_machine_c2`, `test_schema`; on the bench: see Runs)
 - [x] Existing MAC and TDMA tests unchanged and passing. (unchanged in meaning: the three stubs of the shift hook changed signature, and the one test that checked its arguments now checks the error in us)
-- [ ] Bench, C3 + C2 for several hours, after #34: no mistiming loss; guard distribution and empty-window Rx time (before and after) reported.
-- [x] ADR: the guard strategy, the ratio, the thresholds; supersedes the "Version 2" section of ADR-0012. (ADR-0022; the ratio stays provisional until the several-hour run)
+- [x] Bench, C3 + C2 for several hours, after #34: no mistiming loss; guard distribution and empty-window Rx time (before and after) reported. (PASS 2026-10-08, build `77adecb-o954ffd`, 5 h 30 min to the 100th locked packet: 103 of 103 Sync packets received, no `RX_LATE` or `SLOT_SUSPECT`, guard 10 or 11 ms in every window with a valid estimate, empty window median 286 ms against 1939 ms; see Result. The C2 then locked up at 9 h 50 min, `node-silences.md` event 4, #101)
+- [x] ADR: the guard strategy, the ratio, the thresholds; supersedes the "Version 2" section of ADR-0012. (ADR-0022; the several-hour run passed on 2026-10-08 with the ratio of 3, on the NUCLEO Clock)
 
 ## Runs
 
@@ -131,6 +159,9 @@ A packet that starts well before the window opens is not tested (the radio joine
 | 2026-10-05 22:3x | `guard-from-drift.toml` | `dcfaeba-o954ffd` | invalid | none (the build failed, nothing was flashed) | #73 alternation, no firmware verdict |
 | 2026-10-05 22:40 | `guard-from-drift.toml` | `dcfaeba-o954ffd` | FAIL | `tools/arclog/runs/20261005T224004Z-dcfaeba-o954ffd/` | `SYNC_RX act=t1` count 68 of 100 at 6 h: node silence (event 2): the CM0+ of Node 2 stopped after `SLOT ph=1 ce=8` at 3 h 46 min, the CM4 kept logging; before it, 71 of 71 packets received, guard 10 to 12 ms, empty window median 288 ms (Result) |
 | 2026-10-06 06:3x | `guard-from-drift-swapped.toml` | none (nothing was built) | invalid | none | Bench reason, no verdict: both Pi Nodes unreachable from 06:20:36 UTC, the second at which both captures stop (the names resolve, the internet is up, TCP to both log ports gets no answer): both nodes were unplugged at the lab (told by the user). `bench run` refused: no ST-LINK probe, Pi Nodes not answering. Nothing flashed |
+
+| 2026-10-08 08:51 | `guard-from-drift.toml` | `77adecb-o954ffd` | invalid | `tools/arclog/runs/20261008T085115Z-77adecb-o954ffd/` | `bench run` exit 4 at +40 min: the laptop's link to both Pi Nodes was cut on purpose from 09:28:58 to 09:31:15 UTC (137 s, a test by Simon), `port_down` on both and the lines lost with it. No firmware verdict: the nodes never reset, and the collector kept every line, so the same arming is judged from it (next row) |
+| 2026-10-08 08:51 | `guard-from-drift.toml`, judged from the log collector | `77adecb-o954ffd` | PASS | `tools/arclog/runs/20261008T085115Z-77adecb-o954ffd-collector/` | `python -m bench.collector --since 2026-10-08T08:51:15Z`, PASS at +19813.6 s (5 h 30 min, 14:21 UTC): `CLK to=WARM` at +73 s, `DRIFT ok=1` at +1413 s, guard 8 to 15 ms from +1452 s, 100 locked packets, no forbidden event; 103 of 103 packets received, guard 10 or 11 ms, empty window median 286 ms (Result). The record also holds `postmortem-node2-*.txt` (the CM4 registers and both RAM banks twice). Node 2 locked up at 18:41:28 UTC, 4 h 20 min after the verdict (`node-silences.md`, event 4) |
 
 The runs of 2026-10-05 ran on the uncommitted tree: the `-d` hash of their Build ID names that state, not a commit.
 The commits of 2026-10-06 add to it the timing probes `rx_slot` and `rx_open` (the split probe run already had them) and the measured 5 ms Rx start latency; the runs from the long run on carry the commit.

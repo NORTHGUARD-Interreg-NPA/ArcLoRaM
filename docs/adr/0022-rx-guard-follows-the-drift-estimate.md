@@ -2,7 +2,8 @@
 
 ## Status
 Accepted for the mechanism (issue #36).
-The ratio is provisional until the several-hour run of the Test Record confirms it.
+The several-hour run of the Test Record passed on 2026-10-08 (5 h 30 min, a guard of 10 or 11 ms in every window with a valid estimate, every Sync packet received): the ratio of 3 holds on the NUCLEO Clock.
+The Production Clock needs its own run (#109).
 The Rx start latency is measured with `timing-probe` (Test Record, 2026-10-05), on the NUCLEO Clock.
 Supersedes the "Deferred (Version 2)" section of ADR-0012, and the consequence of ADR-0015 that the current guard and the maximum guard are equal until Version 2.
 
