@@ -57,7 +57,7 @@ At the floor (g = 8 ms) the window is predicted at 2 x 8 + 262 = 278 ms: to be m
 ## Result: the 6 h run (2026-10-05 22:40 to 2026-10-06 04:40 UTC), failed on a node silence after 3 h 46 min
 
 `guard-from-drift.toml`, build `dcfaeba-o954ffd` (a commit), Node 5 as C3 and Node 2 as C2, DEV profile with the boot burst, NUCLEO Clock.
-The run failed on its count of locked packets (68 of 100), because the CM0+ of Node 2 stopped at 3 h 46 min (`node-silences.md`, event 2) and a scenario cannot see a silent node until #86; it held the boards 2 h 14 min more.
+The run failed on its count of locked packets (68 of 100), because the CM0+ lines of Node 2 stopped at 3 h 46 min (`node-silences.md`, event 2; which core stopped is not known) and a scenario cannot see a silent node until #86; it held the boards 2 h 14 min more.
 The 3 h 46 min before the stop are data:
 
 | | |
@@ -157,7 +157,7 @@ A packet that starts well before the window opens is not tested (the radio joine
 | 2026-10-05 17:5x | flags: as above with `tag=rx_open seg=setrx` | `a419c9b-db764f8-o9bf158` | invalid | none (the build failed; the first attempt at it never reached `bench`, run from the wrong directory) | #73 alternation, no firmware verdict |
 | 2026-10-05 17:54 | flags: as above with `tag=rx_open seg=setrx` | `a419c9b-db764f8-o9bf158` | measurement | `tools/arclog/runs/20261005T175430Z-a419c9b-db764f8-o9bf158/` | The split probe: channel 0.9 to 1.3 ms, MAC 0.09, `SLOT` line 5.0, guard 0.3 to 0.4, `RX_WIN` line 5.3 to 5.4, `RadioSetRx` 2.7; 4.14 to 4.50 ms without the two log lines |
 | 2026-10-05 22:3x | `guard-from-drift.toml` | `dcfaeba-o954ffd` | invalid | none (the build failed, nothing was flashed) | #73 alternation, no firmware verdict |
-| 2026-10-05 22:40 | `guard-from-drift.toml` | `dcfaeba-o954ffd` | FAIL | `tools/arclog/runs/20261005T224004Z-dcfaeba-o954ffd/` | `SYNC_RX act=t1` count 68 of 100 at 6 h: node silence (event 2): the CM0+ of Node 2 stopped after `SLOT ph=1 ce=8` at 3 h 46 min, the CM4 kept logging; before it, 71 of 71 packets received, guard 10 to 12 ms, empty window median 288 ms (Result) |
+| 2026-10-05 22:40 | `guard-from-drift.toml` | `dcfaeba-o954ffd` | FAIL | `tools/arclog/runs/20261005T224004Z-dcfaeba-o954ffd/` | `SYNC_RX act=t1` count 68 of 100 at 6 h: node silence (event 2): the CM0+ lines of Node 2 stopped after `SLOT ph=1 ce=8` at 3 h 46 min, the CM4 kept logging (which core stopped is not known); before it, 71 of 71 packets received, guard 10 to 12 ms, empty window median 288 ms (Result) |
 | 2026-10-06 06:3x | `guard-from-drift-swapped.toml` | none (nothing was built) | invalid | none | Bench reason, no verdict: both Pi Nodes unreachable from 06:20:36 UTC, the second at which both captures stop (the names resolve, the internet is up, TCP to both log ports gets no answer): both nodes were unplugged at the lab (told by the user). `bench run` refused: no ST-LINK probe, Pi Nodes not answering. Nothing flashed |
 
 | 2026-10-08 08:51 | `guard-from-drift.toml` | `77adecb-o954ffd` | invalid | `tools/arclog/runs/20261008T085115Z-77adecb-o954ffd/` | `bench run` exit 4 at +40 min: the laptop's link to both Pi Nodes was cut on purpose from 09:28:58 to 09:31:15 UTC (137 s, a test by Simon), `port_down` on both and the lines lost with it. No firmware verdict: the nodes never reset, and the collector kept every line, so the same arming is judged from it (next row) |

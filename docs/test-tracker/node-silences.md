@@ -8,7 +8,7 @@ The fourth event gets a proper investigation: an issue, the rows below as its ev
 
 **Count: 4**
 
-The fourth event (2026-10-08) is the one this rule investigates: the investigation is #101 "Find the cause of the CM0+ stalls: crash record, checkpoints and the reset cause", the rows below are its evidence, and `spot-20261007-node2-as-c3.md` is the scenario that waited for it (the swap soak).
+The fourth event (2026-10-08) is the one this rule investigates: the investigation is #101 "Find the cause of the core stalls: crash record, checkpoints and the reset cause on both cores", the rows below are its evidence, and `spot-20261007-node2-as-c3.md` is the scenario that waited for it (the swap soak).
 Events 3 and 4 are CM4 HardFault lockups read from the Pi's OpenOCD journal, not stalls of the CM0+ alone; events 1 and 2 were never read that way.
 
 ## What counts
@@ -52,7 +52,7 @@ Found at the end of the 6 h run `guard-from-drift.toml` (Test Record of #36), wh
 
 - The C2 locked at +72 s and ran 3 h 46 min: 608 Rx windows of the new guard (62 at the cap before the estimate was valid, 546 at 10 to 12 ms), every packet the C3 sent to a running C2 received (71 of 71), no `RX_LATE`, `SLOT_SUSPECT`, `TX_LATE` or `TX_DENIED`.
 - The last line of the CM0+ is `SLOT ph=1 ce=8 dec=RX wake=0 nom=13260032` (device 03:41:00.0236, host 02:26:16 UTC). The line that follows it in every other Rx slot, `RX_WIN` (5.3 ms later, after the log call of `SLOT`), never came, and no CM0+ line ever did.
-- **The CM4 kept logging**: `4P STOP2_WAKES n=1728` at 02:41:29 UTC and `n=1792` at 03:48:41 (one line per 64 wakes, about one an hour). So the board and its log path were alive and only the CM0+ stopped. In event 1 no CM4 line was due in the 43 min, so the two cannot be compared on that.
+- **The CM4 kept logging**: `4P STOP2_WAKES n=1728` at 02:41:29 UTC and `n=1792` at 03:48:41 (one line per 64 wakes, about one an hour). So the board and the CM4's own log were alive 15 min and 82 min after the last CM0+ line: the CM0+ lines stopped, and whether the CM0+ itself stopped is not known (event 4 shows a CM0+ that went on running while its lines were stuck). This is not the pattern of events 3 and 4, where the CM4 died. In event 1 no CM4 line was due in the 43 min, so the two cannot be compared on that.
 - The C3 (`nuna-node-01`, same build) logged to the end of the run, and the capture gaps of 2026-10-05 (45, 90 and 250 min) hit both nodes at the same times: capture outages, not silences. In three days of captures the only node silences are on `nuna-node-02`.
 - The last line is a log line in both events (a `TX_DONE` in event 1, a `SLOT` here), and the stop is in thread or ISR context respectively.
 - **What the change under test runs between `SLOT` and `RX_WIN`:** `RadioTimeOnAir`, the guard resolver (`MAC_GetClockState`, `MAC_GetLastSyncMs`, `DriftEstimator_Get`, `GuardPolicy_Ms`), and the contention check. `DriftEstimator_Get` only copies cached fit values (no loop), the policy is integer arithmetic without loops, and the same path ran 608 times in the run before the stop.
@@ -63,8 +63,9 @@ Found at the end of the 6 h run `guard-from-drift.toml` (Test Record of #36), wh
 2. **A hard fault** in the slot task or in the trace code. It leaves nothing in the trace (ADR-0001), and only a debug read of the stalled core (the program counter and the fault registers) can tell, which bench does not do.
 3. **Specific to this board, its Pi Node or the C2 role.** The only silences of three days are on Node 2, and it is the only C2 role board of the two. A pair with the roles swapped (the C3 on Node 2, the C2 on Node 5) would tell the board from the role.
 4. **The guard code of this change.** It cannot be excluded by one event, and it is on the path where the core stopped; against it, event 1 happened on main before it existed, and the path ran 608 times.
+5. **The CM0+ alive and its lines stuck** on the way to the UART (its trace queue full, an IPCC channel the CM4 does not free), as event 4 showed it, but with a live CM4. Nobody read the CM0+ RAM or the IPCC state in this event; the next silent node should, before anything resets it (#101, #67).
 
-The state of the stalled CM0+ was the best evidence there was, and it is gone: both nodes were unplugged at the lab at 06:20 UTC on 2026-10-06 before anyone read it. #101 makes the next stall leave that evidence (a crash record, checkpoints, the reset cause), and #100 restarts the stalled core.
+The state of the stalled core was the best evidence there was, and it is gone: both nodes were unplugged at the lab at 06:20 UTC on 2026-10-06 before anyone read it. #101 makes the next stall leave that evidence (a crash record, checkpoints, the reset cause), and #100 restarts the stalled core.
 
 ## Event 4: what the trace and the post-mortem show
 

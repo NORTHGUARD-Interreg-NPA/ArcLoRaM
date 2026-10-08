@@ -1,6 +1,6 @@
 # Spot check 2026-10-07: Node 2 as C3 and Node 5 as C2, to tell the board from the C2 role
 
-Purpose: spontaneous. Issues: #101 "Find the cause of the CM0+ stalls", and the multi-hour C3 + C2 criterion of #45 "Sync schedule within the duty-cycle budget".
+Purpose: spontaneous. Issues: #101 "Find the cause of the core stalls", and the multi-hour C3 + C2 criterion of #45 "Sync schedule within the duty-cycle budget".
 
 Node 2 has stopped logging three times as a C2.
 This run swaps the roles of the two boards on the Pi Nodes: if the board is the cause, Node 2 stops again as a C3; if the C2 role is, Node 5 stops as a C2.
@@ -126,4 +126,4 @@ BENCH_COLLECTOR_URL=<base URL of the collector> uv run --project tools/bench pyt
 Neither Node 2 as C3 nor Node 5 as C2 stopped in about 18 h: the fourth row of the table above, "neither stops".
 With the 5 h 06 min of the invalid first try, each has about 23 h clean.
 At the rate seen as a C2 (3 stops in 11.4 h, one per 3.8 h) the chance of 23 h without a stop is about 0.2 %, and 28 % at the bottom of the 95 % range (0.054 per hour), so the rate was either far lower than seen or the cause is not the board or the C2 role alone.
-What is left is the original pairing, Node 2 as a C2 under a Node 5 as the C3, on the same build, to see whether Node 2 stops again there (#101 "Find the cause of the CM0+ stalls").
+What is left is the original pairing, Node 2 as a C2 under a Node 5 as the C3, on the same build, to see whether Node 2 stops again there (#101 "Find the cause of the core stalls").
