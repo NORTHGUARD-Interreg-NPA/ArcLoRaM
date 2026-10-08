@@ -12,9 +12,10 @@
  *
  *              SYNC_PROFILE_PROD  the product schedule: a long Sync period,
  *                                 derived from the drift bound (#45).
- *                                 PROVISIONAL: 9 min, from the NUCLEO Clock
- *                                 figures of #34 with one lost packet
- *                                 tolerated; #45 replaces it.
+ *                                 9 min, from the NUCLEO Clock figures of #34
+ *                                 with one lost packet tolerated (ADR-0020);
+ *                                 provisional only for the Production Clock,
+ *                                 which is not measured yet (#112).
  *              SYNC_PROFILE_DEV   frequent Sync for development, INSIDE the
  *                                 duty-cycle budget: a Sync phase every
  *                                 200 s, one packet per node per phase,
@@ -62,7 +63,7 @@
 #elif SYNC_PROFILE == SYNC_PROFILE_PROD
 #  define SYNC_PROFILE_NAME             "PROD"
 #  define SYNC_PROFILE_TX_BUDGET        1u
-#  define SYNC_PROFILE_CELL_GAP_MS      51500u    /* cell 54 s, phase 540 s: 0.18 % (PROVISIONAL, #45) */
+#  define SYNC_PROFILE_CELL_GAP_MS      51500u    /* cell 54 s, phase 540 s: 0.18 % (Production Clock: #112) */
 #  define SYNC_PROFILE_SILENCE_MS       1620000u  /* 3 periods: one lost packet (k = 1) must not drop the node to COLD */
 #else
 #  error "SYNC_PROFILE must be SYNC_PROFILE_BRINGUP, SYNC_PROFILE_DEV or SYNC_PROFILE_PROD"

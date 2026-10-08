@@ -794,7 +794,7 @@ The bench boards carry it, and it is the clock of every bench result until the p
 Its figures do not transfer to the Production Clock (a calibration residual, a drift rate, a temperature behaviour).
 
 ### Sync Profile
-The compile-time choice of how often the network synchronises: `DEV` (the default; a Sync phase every 200 s, one packet per node per phase, inside the duty-cycle budget, for work that assumes synchronised clocks), `PROD` (the product period derived from the drift bound, provisional) and `BRINGUP` (the former 30 s schedule, host tests only).
+The compile-time choice of how often the network synchronises: `DEV` (the default; a Sync phase every 200 s, one packet per node per phase, inside the duty-cycle budget, for work that assumes synchronised clocks), `PROD` (the product period derived from the drift bound, provisional until the Production Clock is measured, #112) and `BRINGUP` (the former 30 s schedule, host tests only).
 It also fixes the Sync Silence Timeout. A trace names it in the `BOOT` line (`sync=`).
 It is orthogonal to the Regime: every Regime has a `DEV` and a `PROD` variant.
 An option, the **boot burst** (`SYNC_BOOT_BURST`), makes the first Sync phase after the C3 boots send several packets so that boards booted with it lock at once.
