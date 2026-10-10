@@ -25,6 +25,9 @@ The C3 is the board connected to this PC unless the user says otherwise; the oth
 Say in the report which choices you made.
 A Pi Node has one operator at a time, as a local board has: the lease is the only coordination `bench` needs.
 
+The Pi Nodes bench looks for are listed in `tools/bench/pi-nodes.toml` (shared through the repo, MagicDNS short names only), plus any in `~/.config/bench/bench.toml` (this machine; an entry with the same name overrides the shared one).
+A node you build goes in the shared file, so nobody rediscovers it; `bench boards` lists the ones that do not answer.
+
 ## The loop
 
 A task that changes firmware behaviour runs this loop, at most 5 build-flash-check cycles; then stop and report what is known.

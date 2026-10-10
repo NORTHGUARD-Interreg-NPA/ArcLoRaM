@@ -1,8 +1,10 @@
 """bench.toml: where bench looks for Pi Nodes (ADR-0002).
 
-The file lists endpoints, not boards: a board is still recognised by its UID against
-Common/Protocol/node_id.c, and its class is the scenario's. It is per machine
-($BENCH_CONFIG, else ~/.config/bench/bench.toml), so every worktree sees the same remotes.
+The files list endpoints, not boards: a board is still recognised by its UID against
+Common/Protocol/node_id.c, and its class is the scenario's. There are two, same format:
+tools/bench/pi-nodes.toml is the fleet shared through the repo (host names only: the repo is
+public), and the per-machine file ($BENCH_CONFIG, else ~/.config/bench/bench.toml) adds nodes
+or overrides one by name (to pin an address). Every worktree sees the same remotes.
 
     [[remote]]
     name = "nuna-node-01"     # capture node and display name (default: host)
@@ -25,6 +27,7 @@ except ImportError:  # Python 3.10
     import tomli as tomllib
 
 DEFAULT_CONFIG = Path(".config/bench/bench.toml")
+FLEET_FILE = Path("tools/bench/pi-nodes.toml")  #: relative to the repo root
 
 _NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _HOST_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
@@ -77,9 +80,21 @@ def parse_config(text: str) -> list[Remote]:
     return remotes
 
 
+def _read(file: Path) -> list[Remote]:
+    try:
+        return parse_config(file.read_text(encoding="utf-8"))
+    except (ValueError, tomllib.TOMLDecodeError) as exc:
+        raise ValueError(f"{file}: {exc}") from exc
+
+
 def load_remotes(path: str | Path | None = None, env: Mapping[str, str] = os.environ,
-                 home: Path | None = None) -> list[Remote]:
-    """The configured Pi Nodes. No default file means none; a file named by $BENCH_CONFIG must exist."""
+                 home: Path | None = None, fleet: Path | None = None) -> list[Remote]:
+    """The configured Pi Nodes: the shared fleet file first, then this machine's file on top of it
+    (same name: the machine's entry wins, to pin an address; new name: appended).
+    No machine file means the fleet alone; a file named by $BENCH_CONFIG must exist."""
+    remotes: dict[str, Remote] = {}
+    if fleet is not None and fleet.is_file():
+        remotes.update({r.name: r for r in _read(fleet)})
     named = path or env.get("BENCH_CONFIG")
     if named:
         file = Path(named)
@@ -87,9 +102,6 @@ def load_remotes(path: str | Path | None = None, env: Mapping[str, str] = os.env
             raise ValueError(f"BENCH_CONFIG: {file} does not exist")
     else:
         file = (home or Path.home()) / DEFAULT_CONFIG
-        if not file.is_file():
-            return []
-    try:
-        return parse_config(file.read_text(encoding="utf-8"))
-    except (ValueError, tomllib.TOMLDecodeError) as exc:
-        raise ValueError(f"{file}: {exc}") from exc
+    if file.is_file():
+        remotes.update({r.name: r for r in _read(file)})
+    return list(remotes.values())

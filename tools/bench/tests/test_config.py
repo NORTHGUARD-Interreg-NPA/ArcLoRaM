@@ -1,5 +1,8 @@
 """bench.toml: where bench looks for Pi Nodes."""
 
+import re
+from pathlib import Path
+
 import pytest
 
 from bench.config import Remote, load_remotes, parse_config
@@ -59,6 +62,52 @@ def test_the_default_file_is_in_the_user_config_directory(tmp_path):
 
 def test_no_default_file_means_no_remote(tmp_path):
     assert load_remotes(env={}, home=tmp_path) == []
+
+
+def _fleet(tmp_path, text):
+    f = tmp_path / "pi-nodes.toml"
+    f.write_text(text, encoding="utf-8")
+    return f
+
+
+def test_the_fleet_file_is_enough_without_a_machine_file(tmp_path):
+    fleet = _fleet(tmp_path, '[[remote]]\nhost = "nuna-node-01"\n[[remote]]\nhost = "nuna-node-02"\n')
+    assert [r.name for r in load_remotes(env={}, home=tmp_path, fleet=fleet)] == ["nuna-node-01", "nuna-node-02"]
+
+
+def test_the_machine_file_adds_a_node_after_the_fleet(tmp_path):
+    fleet = _fleet(tmp_path, '[[remote]]\nhost = "nuna-node-01"\n')
+    mine = tmp_path / ".config" / "bench" / "bench.toml"
+    mine.parent.mkdir(parents=True)
+    mine.write_text('[[remote]]\nhost = "lab-pi"\n', encoding="utf-8")
+    assert [r.name for r in load_remotes(env={}, home=tmp_path, fleet=fleet)] == ["nuna-node-01", "lab-pi"]
+
+
+def test_the_machine_file_overrides_a_fleet_node_by_name_in_place(tmp_path):
+    fleet = _fleet(tmp_path, '[[remote]]\nhost = "nuna-node-01"\n[[remote]]\nhost = "nuna-node-02"\n')
+    mine = tmp_path / "mine.toml"
+    mine.write_text('[[remote]]\nname = "nuna-node-01"\nhost = "100.64.0.9"\n', encoding="utf-8")
+    remotes = load_remotes(env={"BENCH_CONFIG": str(mine)}, home=tmp_path, fleet=fleet)
+    assert [(r.name, r.host) for r in remotes] == [("nuna-node-01", "100.64.0.9"), ("nuna-node-02", "nuna-node-02")]
+
+
+def test_a_wrong_fleet_file_names_the_file(tmp_path):
+    fleet = _fleet(tmp_path, '[[remote]]\nhost = "x y"\n')
+    with pytest.raises(ValueError, match="pi-nodes.toml.*host"):
+        load_remotes(env={}, home=tmp_path, fleet=fleet)
+
+
+def test_a_missing_fleet_file_is_no_fleet(tmp_path):
+    assert load_remotes(env={}, home=tmp_path, fleet=tmp_path / "pi-nodes.toml") == []
+
+
+def test_the_fleet_file_of_the_repo_is_valid_and_carries_no_address():
+    from bench.config import FLEET_FILE
+    repo_fleet = Path(__file__).resolve().parents[3] / FLEET_FILE
+    remotes = load_remotes(env={}, home=Path("/nonexistent"), fleet=repo_fleet)
+    assert remotes, "the shared fleet lists at least one Pi Node"
+    for r in remotes:
+        assert not re.fullmatch(r"[0-9.]+", r.host) and "." not in r.host, f"{r.name}: host names only, no address or domain"
 
 
 def test_a_named_file_that_is_missing_is_an_error(tmp_path):

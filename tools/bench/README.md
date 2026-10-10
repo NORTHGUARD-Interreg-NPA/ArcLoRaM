@@ -285,7 +285,8 @@ Its ST-LINK is bypassed, so bench reaches it by name, not by probe serial number
 The design and its open points are in `docs/adr/0002-remote-boards-through-pi-nodes.md`.
 
 ```toml
-# ~/.config/bench/bench.toml, or the file named by $BENCH_CONFIG
+# tools/bench/pi-nodes.toml (the shared fleet, in the repo), then
+# ~/.config/bench/bench.toml, or the file named by $BENCH_CONFIG (this machine)
 [[remote]]
 name = "nuna-node-01"     # capture node and display name (default: host)
 host = "nuna-node-01"     # MagicDNS name or tailnet address
@@ -293,8 +294,13 @@ gdb  = 3333               # OpenOCD GDB port of the M4 (default)
 log  = 4000               # UART log port (default)
 ```
 
-- The file says where to look.
-  Node IDs and classes stay out of it: a board is recognised by its UID, and its class is the scenario's.
+- Two files, same format.
+  `tools/bench/pi-nodes.toml` is the fleet every checkout shares: a new Pi Node is added there, by its MagicDNS short name, so nobody rediscovers it.
+  The repo is public: no tailnet domain and no address in it.
+  The per-machine file is layered on top: an entry with the same `name` replaces the shared one (pin an address, change a port), a new `name` is added.
+  A node that is off, or not on your tailnet, shows as "not answering" in `bench boards`.
+- The files say where to look.
+  Node IDs and classes stay out of them: a board is recognised by its UID, and its class is the scenario's.
 - `bench boards` lists a Pi Node whose log port answers as `pi-node <name>`, and names the ones that do not answer.
   It opens only the read-only log port.
   The GDB port is a debug session, opened to read a UID (`--probe-uids`), flash or reset.

@@ -99,17 +99,17 @@ def parse_proposal(text: str) -> tuple[int, str]:
 
 def _context(args: argparse.Namespace):
     """(repo, fleet, ports, node table, capture dir): the fleet is the local ST-LINK boards and the
-    Pi Nodes of bench.toml behind the one programmer-shaped interface."""
+    Pi Nodes of pi-nodes.toml and bench.toml behind the one programmer-shaped interface."""
     from bench.boards import load_node_table, query_ports
     from bench.capture import CAPTURE_DIR
-    from bench.config import load_remotes
+    from bench.config import FLEET_FILE, load_remotes
     from bench.fleet import Fleet
     from bench.pinode import PiNodeLink
     from bench.programmer import Programmer
 
     repo = Path(args.repo) if args.repo else find_repo(Path.cwd())
     try:
-        remotes = load_remotes()
+        remotes = load_remotes(fleet=repo / FLEET_FILE)
     except ValueError as exc:
         raise SystemExit(f"bench: {exc}") from exc
     fleet = Fleet(Programmer(), [PiNodeLink(r) for r in remotes])
