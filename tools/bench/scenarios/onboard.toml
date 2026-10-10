@@ -1,0 +1,49 @@
+# Purpose: spontaneous, run for every new board. Test Record docs/test-tracker/spot-20261010-onboard-board.md.
+# A template: node 0 is the board under test, aimed at a real Node ID with
+#   bench run tools/bench/scenarios/onboard.toml --as <Node ID> --probe-uid <Pi Node name>
+# One lone C3, so no other board is touched. From the trace alone it proves what remote control needs:
+#  - both cores flash, verify and boot the build (the smoke check) and the log reaches us (max_silence);
+#  - the radio sends: a lone C3 sends cell 0 of its Sync phase once after each boot and skips the
+#    other cells (dec=SKIP), so each boot gives one SYNC_TX that ends in TX_DONE, never a TX_TIMEOUT;
+#  - the firmware sleeps in STOP2 (STOP2_WAKES is logged every 64th wake);
+#  - a reset still works against a board asleep in STOP2: two resets, each must reboot both cores
+#    (the run cannot pass without it, and no other reboot is allowed), and the C3 starts a fresh
+#    Sync phase (ph=0 ce=0) after each, so it is back on the air.
+# A C3 alone does not prove the radio receives: that needs a second board (see the Test Record).
+description = "A new board answers every remote operation: flash, boot, log, radio Tx, STOP2, reset"
+timeout = "8m"
+max_silence = "1m"
+
+[nodes]
+0 = "C3"
+
+[[action]]
+reset = 0
+at = "+150s"        # after the first STOP2_WAKES (about 100 s after boot)
+
+[[action]]
+reset = 0
+at = "+5m"          # asleep again, after the second boot's first STOP2_WAKES
+
+[[expect]]
+node = 0
+event = "TX_DONE"
+count = 3           # one per boot, as for SYNC_TX below
+within = "7m"
+
+[[expect]]
+node = 0
+event = "STOP2_WAKES"
+count = 2
+within = "6m"
+
+[[expect]]
+node = 0
+event = "SYNC_TX"
+where = { ph = "0", ce = "0" }
+count = 3           # one per boot: the flash's, and one after each reset
+within = "7m"
+
+[[forbid]]
+node = 0
+event = "TX_TIMEOUT"

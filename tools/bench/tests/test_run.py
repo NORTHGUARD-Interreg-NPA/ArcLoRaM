@@ -8,7 +8,7 @@ import pytest
 from arclog.capture import DailyWriter
 from bench.boards import Board, format_uid
 from bench.run import RunOutcome, Scheduler, expect_spec, follow, slice_capture, write_record
-from bench.scenario import from_dict, load, parse_expect_text, plan, to_toml
+from bench.scenario import from_dict, load, load_as, parse_expect_text, plan, retarget, to_toml
 
 SCENARIOS = Path(__file__).resolve().parents[1] / "scenarios"
 T0 = datetime(2026, 9, 29, 10, 0, tzinfo=timezone.utc)
@@ -17,6 +17,56 @@ UID2 = (0x0026001A, 0x32325014, 0x20383543)
 
 
 # --- scenarios --------------------------------------------------------------------
+
+
+TEMPLATE = {
+    "timeout": "8m",
+    "nodes": {"0": "C3"},
+    "action": [{"reset": 0, "at": "+150s"}, {"reset": 0, "after": {"node": 0, "event": "CLK"}, "delay": "5s"}],
+    "expect": [{"node": 0, "event": "SYNC_TX", "where": {"ph": "0"}, "count": 3}, {"event": "CLK"}],
+    "forbid": [{"node": 0, "event": "TX_TIMEOUT"}],
+}
+
+
+def test_a_template_scenario_is_aimed_at_a_real_board_by_its_node_id():
+    s = from_dict(retarget(TEMPLATE, 7))
+    assert s.nodes == {7: "C3"}
+    assert [a.reset for a in s.actions] == [7, 7]
+    assert s.actions[1].after.node == 7
+    assert s.expects[0].node == 7 and s.expects[1].node is None      # "any node" stays any node
+    assert s.forbids[0].node == 7
+
+
+def test_retargeting_leaves_the_template_itself_alone():
+    retarget(TEMPLATE, 7)
+    assert TEMPLATE["nodes"] == {"0": "C3"} and TEMPLATE["action"][0]["reset"] == 0
+
+
+@pytest.mark.parametrize("node_id", [0, -1, 255, 300])
+def test_only_a_real_node_id_can_replace_the_template_node(node_id):
+    with pytest.raises(ValueError, match="Node ID"):
+        retarget(TEMPLATE, node_id)
+
+
+def test_a_scenario_without_the_template_node_cannot_be_retargeted():
+    with pytest.raises(ValueError, match="template"):
+        retarget({"nodes": {"2": "C2"}}, 7)
+
+
+def test_a_retargeted_scenario_is_saved_in_the_record_as_the_real_scenario(tmp_path):
+    f = tmp_path / "t.toml"
+    f.write_text('timeout = "8m"\n[nodes]\n0 = "C3"\n[[action]]\nreset = 0\nat = "+150s"\n'
+                 '[[expect]]\nnode = 0\nevent = "TX_DONE"\n', encoding="utf-8")
+    s, text = load_as(f, 7)
+    assert s.nodes == {7: "C3"}
+    assert load_text_roundtrip(text, tmp_path).nodes == {7: "C3"}      # bench validate reloads the record
+
+
+def load_text_roundtrip(text, tmp_path):
+    f = tmp_path / "record.toml"
+    f.write_text(text, encoding="utf-8")
+    return load(f)
+
 
 
 @pytest.mark.parametrize("path", sorted(SCENARIOS.glob("*.toml")), ids=lambda p: p.name)

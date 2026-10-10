@@ -341,12 +341,16 @@ def cmd_reset(args: argparse.Namespace) -> int:
 
 def _scenario_from_args(args: argparse.Namespace):
     """(Scenario, TOML text) from a file, or from --node/--watch/--expect/--forbid/-D/--timeout."""
-    from bench.scenario import from_dict, load, parse_expect_text, to_toml
+    from bench.scenario import from_dict, load, load_as, parse_expect_text, to_toml
 
     if args.scenario:
         if args.node or args.watch or args.expect or args.forbid or args.define:
             raise ValueError("give a scenario file or --node/--watch/--expect/--forbid/-D, not both")
+        if args.as_node is not None:
+            return load_as(args.scenario, args.as_node)
         return load(args.scenario), Path(args.scenario).read_text(encoding="utf-8")
+    if args.as_node is not None:
+        raise ValueError("--as aims a template scenario file at a Node ID: give the file")
     if not args.node:
         raise ValueError("give a scenario file or at least one --node ID=CLASS")
     d: dict = {}
@@ -490,10 +494,10 @@ def cmd_note(args: argparse.Namespace) -> int:
 
 
 def cmd_scenario(args: argparse.Namespace) -> int:
-    from bench.scenario import load, plan
+    from bench.scenario import load, load_as, plan
 
     try:
-        s = load(args.file)
+        s = load_as(args.file, args.as_node)[0] if args.as_node is not None else load(args.file)
     except (OSError, ValueError) as exc:
         print(f"{args.file}: {exc}", file=sys.stderr)
         return 3
@@ -579,6 +583,8 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--timeout", help="e.g. 10m (default 10m)")
     rn.add_argument("--description", help="one line saved with the scenario")
     rn.add_argument("--save", metavar="FILE", help="also save the scenario described by the options")
+    rn.add_argument("--as", dest="as_node", type=int, metavar="ID",
+                    help="run a template scenario (its board under test is node 0) on this Node ID")
     rn.add_argument("--probe-uids", action="store_true", help="read unknown UIDs over SWD (reboots those boards)")
     rn.add_argument("--probe-uid", action="append", metavar="ID",
                     help="read this board's UID over SWD (probe serial number or Pi Node name)")
@@ -598,6 +604,8 @@ def build_parser() -> argparse.ArgumentParser:
     sc = sub.add_parser("scenario", help="check a scenario file without touching the boards")
     sc.add_argument("action", choices=["check"])
     sc.add_argument("file")
+    sc.add_argument("--as", dest="as_node", type=int, metavar="ID",
+                    help="aim a template scenario (its board under test is node 0) at this Node ID")
     sc.set_defaults(func=cmd_scenario)
 
     r = sub.add_parser("reset", help="reset boards (no flash)")

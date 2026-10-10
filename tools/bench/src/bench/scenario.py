@@ -219,6 +219,45 @@ def load(path: str | Path) -> Scenario:
             raise ValueError(f"{path}: {exc}") from None
 
 
+#: A template scenario names "the board under test" as this Node ID; `--as ID` puts a real one in its place.
+TEMPLATE_NODE = 0
+
+
+def retarget(d: dict, node_id: int) -> dict:
+    """A copy of the scenario dict `d` with TEMPLATE_NODE replaced by `node_id` wherever a Node ID is named
+    (the [nodes] key, `reset`, and the `node` of an `after`, an expect or a forbid)."""
+    if not 1 <= node_id <= 254:
+        raise ValueError(f"--as {node_id}: not a Node ID (1-254)")
+    template = str(TEMPLATE_NODE)
+    if template not in {str(k) for k in d.get("nodes") or {}}:
+        raise ValueError(f"not a template: [nodes] has no board under test (node {TEMPLATE_NODE}) to aim at --as")
+
+    def swap(v):
+        return node_id if str(v) == template else v
+
+    def swap_node(t: dict) -> dict:
+        return {**t, "node": swap(t["node"])} if "node" in t else dict(t)
+
+    out = dict(d)
+    out["nodes"] = {str(swap(k)): v for k, v in d["nodes"].items()}
+    out["action"] = [{**t, "reset": swap(t["reset"]), **({"after": swap_node(t["after"])} if "after" in t else {})}
+                     for t in d.get("action", [])]
+    out["expect"] = [swap_node(t) for t in d.get("expect", [])]
+    out["forbid"] = [swap_node(t) for t in d.get("forbid", [])]
+    return out
+
+
+def load_as(path: str | Path, node_id: int) -> tuple[Scenario, str]:
+    """A template scenario file aimed at Node ID `node_id`: the Scenario, and the TOML text of that real
+    scenario (what a run record keeps, so `bench validate` can load it again)."""
+    with open(path, "rb") as f:
+        try:
+            d = retarget(tomllib.load(f), node_id)
+        except tomllib.TOMLDecodeError as exc:
+            raise ValueError(f"{path}: {exc}") from None
+    return from_dict(d), f"# {Path(path).name} run as Node ID {node_id}\n" + to_toml(d)
+
+
 # ---------------------------------------------------------------------------
 # Command line shorthand and saving
 # ---------------------------------------------------------------------------

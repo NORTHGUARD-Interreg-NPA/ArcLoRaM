@@ -28,6 +28,13 @@ A Pi Node has one operator at a time, as a local board has: the lease is the onl
 The Pi Nodes bench looks for are listed in `tools/bench/pi-nodes.toml` (shared through the repo, MagicDNS short names only), plus any in `~/.config/bench/bench.toml` (this machine; an entry with the same name overrides the shared one).
 A node you build goes in the shared file, so nobody rediscovers it; `bench boards` lists the ones that do not answer.
 
+**A new Pi Node board** (each one, once):
+1. A board with the factory firmware is flashed by hand with ArcLoRaM first (on a PC, ST-LINK USB, no Pi wires on it), then wired to its Pi.
+2. `bench boards --probe-uid <Pi Node name>` reads its UID; add it to `Common/Protocol/node_id.c` with the next free Node ID.
+3. `bench run tools/bench/scenarios/onboard.toml --as <Node ID> --probe-uid <Pi Node name>` (about 8 minutes), then `bench flash --node <Node ID>=C3` and `bench reset <Node ID>`.
+4. A row in `docs/test-tracker/spot-20261010-onboard-board.md`.
+Do not touch the boards or the Pis' power during a run: an unplugged board or a dropped Pi invalidates it.
+
 ## The loop
 
 A task that changes firmware behaviour runs this loop, at most 5 build-flash-check cycles; then stop and report what is known.
