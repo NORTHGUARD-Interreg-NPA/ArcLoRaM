@@ -1,23 +1,24 @@
 # Purpose: acceptance. Issue #86, Test Record docs/test-tracker/86-run-validity.md.
-# Two Pi Nodes, about 10 min: Node 2 flashed as the C3, Node 5 only watched. Run twice, once left alone (it
-# must be valid) and once with Node 5's log link cut for about 15 s at +3 min (it must be invalid with a
-# port_down of that Pi Node's log and its interval). The cut leaves the board running, so nothing reboots.
-# If the capture's TCP reader keeps a dead link up until its keepalive fires, the marks do not show the cut
-# and this scenario fails the criterion: the port state then needs a liveness check of its own.
-# A local board never shares a session with a Pi Node: they would share a radio network.
+# Two Pi Nodes, about 12 min: Node 4 (nuna-node-04) flashed as the C3, Node 1 (nuna-node-06) only watched. Run twice,
+# once left alone (it must be valid) and once with Node 1's log link cut for 15 s at +3 min (it must be invalid with
+# a port_down of that Pi Node's log and its interval, whatever else the lost lines add). The cut leaves the board
+# running, so nothing reboots. tools/bench/scripts/cut-link.ps1 makes the cut from this PC and touches no Pi.
+# A TCP link that stalls without a close is no sign of a down port until the reader looks for one: the OS keepalive
+# and a 45 s no-byte rule (arclog capture.py). A reader that waited for the default keepalive would fail this scenario.
+# The scenario was written for Node 2 and Node 5, whose Pis do not answer today.
 description = "Run validity, Pi Nodes: a log link cut of more than 10 s invalidates the session"
 timeout = "12m"
 dataset = true
 
 [nodes]
-2 = "C3"
-5 = "watch"
+4 = "C3"
+1 = "watch"
 
 [overrides]
 SYNC_BOOT_BURST = "5u"
 
 [[expect]]
-node = 2
+node = 4
 event = "SLOT"
 count = 27
 within = "11m"
