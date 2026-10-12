@@ -47,6 +47,20 @@ def test_a_port_down_for_8_seconds_is_not_a_gap():
     assert causes(marks) == []
 
 
+def test_an_outage_dated_to_the_last_proof_of_life_counts_from_there_whatever_the_mark_grid():
+    # A TCP reader found the link dead at 21 s, dated it to the last byte at 12 s, and was reconnected at 26 s:
+    # the marks of the two changes are off the 10 s grid.
+    marks = [mark(0), mark(10), mark(21, c3=(False, 12)), mark(26, c3=(True, 26)), mark(30, c3=(True, 26))]
+
+    assert causes(marks) == [("port_down", "c3", at(12), at(26))]
+
+
+def test_a_dropped_and_reconnected_link_of_7_seconds_is_not_a_gap():
+    marks = [mark(0), mark(10), mark(13, c3=(False, 8)), mark(15, c3=(True, 15)), mark(20, c3=(True, 15))]
+
+    assert causes(marks) == []
+
+
 def test_a_port_that_never_came_up_is_down_from_the_start_to_the_last_mark():
     marks = [mark(s, c2=(False, 0)) for s in range(0, 61, 10)]
 

@@ -37,11 +37,17 @@ Every line is stored verbatim, prefixed with its host UTC receive time.
 Files rotate at UTC midnight (`<node>-YYYYMMDD.log`).
 Each port is read on its own and reopened automatically after a USB replug or a board reset, without holding back the others.
 
-Next to them, `marks-YYYYMMDD.log` gets one line every 10 s of the host's monotonic clock:
+Next to them, `marks-YYYYMMDD.log` gets one line every 10 s of the host's monotonic clock, and one at every change of a port, so that a link dropped and recovered between two ticks leaves a trace:
 the UTC time, the monotonic reading (`mono=`), and for every node `up` or `down` with the UTC time of its last change (`c3=up@2026-10-07T14:00:01.123456Z`).
 A port starts `down` and goes `up` when its reader is connected, so a port that never connected shows as down since the start.
+A port found dead after some silence is `down` since the last time it was known alive, which is before the mark that says so.
 The marks are a separate file because every tool reads `<UTC>\t<line>` in the node files, and a third column would break them.
 They tell what the node files cannot: a port down is a capture gap and not a quiet node, a step of UTC against `mono` is the time service correcting the host, and a stretch without marks is a host that was not running.
+
+A Pi Node's log (`--port tcp://host:4000/name`) is down when its connection is refused or closed, when the OS gives up on it, or when no byte comes for 45 s.
+The OS keepalive probes after 3 s of silence and drops the connection after 5 unanswered probes 1 s apart, so a link that stalls without a close (a cut, a Pi that lost power, a firewall dropping packets) is found dead 8 s after its last sign of life, where a silent line could not tell it from a quiet node: a node logs a line every 5 to 20 s.
+The Pi's own heartbeat (`[pi] uart_idle=7s ntp=synced`, every 31 s) is the proof of life of a quiet link, which is why the reader's own limit is 45 s and not 10.
+A stall shorter than about 10 s may go unseen: the Pi's TCP replays what it held, late, and the capture stamps it on arrival.
 
 ```sh
 uv run arclog capture --port COM5 --node c3 --out runs/2026-09-25

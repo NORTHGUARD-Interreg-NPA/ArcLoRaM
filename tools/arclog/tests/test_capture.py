@@ -256,7 +256,7 @@ def test_a_tcp_reader_reports_when_its_connection_is_up_and_down(monkeypatch):
     monkeypatch.setattr(capture_mod, "RECONNECT_S", 0.01)
     states = []
     with log_server((BOOT.encode() + b"\n", True), (SYNC.encode() + b"\n", False)) as url:
-        reader = tcp_lines(url, on_state=states.append, log=lambda m: None)
+        reader = tcp_lines(url, on_state=lambda up, since=None: states.append(up), log=lambda m: None)
         lines = [raw for _, raw in itertools.islice(reader, 2)]
         reader.close()
 
@@ -325,3 +325,165 @@ def test_capture_marks_a_connected_tcp_port_up(tmp_path):
 
     [path] = tmp_path.glob("marks-*.log")
     assert any(mark.ports["c3"].up for mark in read_marks(path))
+
+
+# --- a TCP link that stalls without a close ---------------------------------------------------------
+# A cut cable, a Pi that lost power or a firewall that drops packets sends nothing, not even a close: only the
+# silence tells. The Pi's own heartbeat comes every 31 s, so a link with no byte for 45 s is dead; the OS
+# keepalive is set to find one sooner, and the reader dates the outage to when the link was last known alive.
+
+
+class Clock:
+    """The reader's monotonic clock, moved by the scripted reads."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+class ScriptedSocket:
+    """A connected socket whose reads follow a script: bytes (a read), a number (the 1 s read timeout expires
+    after that many seconds of the fake clock) or an exception (raised by the read)."""
+
+    def __init__(self, clock, script):
+        self.clock, self.script, self.options = clock, list(script), []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def setsockopt(self, *args):
+        self.options.append(args)
+
+    def ioctl(self, *args):
+        self.options.append(args)
+
+    def settimeout(self, seconds):
+        pass
+
+    def recv(self, size):
+        item = self.script.pop(0) if self.script else 3600.0
+        if isinstance(item, BaseException):
+            raise item
+        if isinstance(item, (int, float)):
+            self.clock.now += item
+            raise socket.timeout("timed out")
+        return item
+
+
+def scripted_links(monkeypatch, *scripts):
+    clock = Clock()
+    links = iter([ScriptedSocket(clock, script) for script in scripts])
+    monkeypatch.setattr(capture_mod.socket, "create_connection", lambda *a, **k: next(links))
+    monkeypatch.setattr(capture_mod, "RECONNECT_S", 0.0)
+    return clock
+
+
+def read_scripted(clock, count, **kwargs):
+    """The first `count` lines of the scripted links and the (up, since) the reader reported."""
+    states = []
+    reader = tcp_lines("tcp://nuna-node-01:4000/c3", monotonic=clock, log=lambda m: None,
+                       on_state=lambda up, since=None: states.append((up, since)), **kwargs)
+    lines = [raw for _, raw in itertools.islice(reader, count)]
+    reader.close()
+    return lines, states
+
+
+def seconds_ago(since):
+    return (datetime.now(timezone.utc) - since).total_seconds()
+
+
+def test_a_link_with_no_byte_for_45_seconds_is_down_since_its_last_byte(monkeypatch):
+    clock = scripted_links(monkeypatch,
+                           [BOOT.encode() + b"\n"] + [10.0] * 5,  # silent for 50 s
+                           [SYNC.encode() + b"\n"])
+
+    lines, states = read_scripted(clock, 2)
+
+    assert lines == [BOOT, SYNC]
+    assert [up for up, _ in states] == [True, False, True]
+    assert seconds_ago(states[1][1]) == pytest.approx(50, abs=2)  # not 8 s: nothing proved the link alive since
+
+
+def test_the_pi_heartbeat_keeps_a_quiet_link_up(monkeypatch):
+    heartbeat = b"[pi] uart_idle=7s ntp=synced\n"
+    clock = scripted_links(monkeypatch,
+                           [BOOT.encode() + b"\n", 31.4, heartbeat, 31.4, heartbeat, 31.4, SYNC.encode() + b"\n"])
+
+    lines, states = read_scripted(clock, 4)
+
+    assert lines == [BOOT, "[pi] uart_idle=7s ntp=synced", "[pi] uart_idle=7s ntp=synced", SYNC]
+    assert [up for up, _ in states] == [True]
+
+
+def test_an_os_error_after_silence_is_dated_to_when_the_keepalive_began_to_fail(monkeypatch):
+    # The OS gave up on probes nobody answered: the link was alive 8 s ago, not 20 s ago.
+    err = TimeoutError(10060, "the peer system failed to respond")  # not our 1 s read timeout: it has an errno
+    clock = scripted_links(monkeypatch, [BOOT.encode() + b"\n", 20.0, err], [SYNC.encode() + b"\n"])
+
+    lines, states = read_scripted(clock, 2)
+
+    assert lines == [BOOT, SYNC]
+    assert [up for up, _ in states] == [True, False, True]
+    assert seconds_ago(states[1][1]) == pytest.approx(capture_mod.KEEPALIVE_DEAD_S, abs=2)
+
+
+def test_a_reset_right_after_data_is_down_from_now(monkeypatch):
+    clock = scripted_links(monkeypatch, [BOOT.encode() + b"\n", ConnectionResetError()], [SYNC.encode() + b"\n"])
+
+    _, states = read_scripted(clock, 2)
+
+    assert seconds_ago(states[1][1]) == pytest.approx(0, abs=2)
+
+
+def test_a_link_that_never_connects_is_down_from_now(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise ConnectionRefusedError("refused")
+
+    monkeypatch.setattr(capture_mod.socket, "create_connection", refuse)
+    monkeypatch.setattr(capture_mod, "RECONNECT_S", 0.01)
+    states = []
+    list(tcp_lines("tcp://nuna-node-01:4000/c3", log=lambda m: None, duration_s=0.05,
+                   on_state=lambda up, since=None: states.append((up, since))))
+
+    assert {up for up, _ in states} == {False}
+    assert seconds_ago(states[0][1]) == pytest.approx(0, abs=2)
+
+
+@pytest.mark.parametrize("silent, stalled, lost", [
+    (0.0, False, 0.0),     # a reset or a close right after data: alive until now
+    (2.9, False, 0.0),     # not yet idle for the keepalive
+    (6.0, False, 6.0),     # the probes began at 3 s: the last proof of life is the last byte
+    (20.0, False, 8.0),    # 8 s of unanswered probes (3 s idle, then 5 probes 1 s apart)
+    (50.0, True, 50.0),    # the reader's own rule: nothing at all, the heartbeat included
+])
+def test_how_long_ago_the_link_was_last_known_alive(silent, stalled, lost):
+    assert capture_mod._lost_s(silent, stalled) == lost
+
+
+@pytest.mark.skipif(not hasattr(socket, "TCP_KEEPIDLE"), reason="no per-socket keepalive timers here")
+def test_the_keepalive_gives_up_on_a_silent_peer_after_8_seconds():
+    with socket.socket() as sock:
+        capture_mod._keepalive(sock)
+
+        assert sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE)
+        assert [sock.getsockopt(socket.IPPROTO_TCP, name)
+                for name in (socket.TCP_KEEPIDLE, socket.TCP_KEEPINTVL, socket.TCP_KEEPCNT)] == [3, 1, 5]
+    assert capture_mod.KEEPALIVE_DEAD_S == 8
+
+
+def test_capture_marks_a_dropped_tcp_port_down_and_up_between_two_ticks(tmp_path, monkeypatch):
+    monkeypatch.setattr(capture_mod, "RECONNECT_S", 0.01)
+    with log_server((BOOT.encode() + b"\n", True), (SYNC.encode() + b"\n", False)) as url:
+        # One regular mark at the start: the drop and the reconnection fall between ticks, and each is a mark.
+        clock = iter([0.0] + [1.0] * 10_000)
+        marks = Marks(tmp_path, ["c3"], monotonic=lambda: next(clock))
+        capture([(url, "c3")], tmp_path, duration_s=1.2, marks=marks)
+
+    [path] = tmp_path.glob("marks-*.log")
+    seen = [mark.ports["c3"].up for mark in read_marks(path)]
+    assert seen[0] is False and True in seen and False in seen[seen.index(True):] and seen[-1] is True

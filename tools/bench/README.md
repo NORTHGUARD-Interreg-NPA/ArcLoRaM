@@ -300,7 +300,7 @@ Every cause has a fault, which decides what it does to the run:
 
 | Fault | Causes | Effect |
 |---|---|---|
-| `bench` | a port down for more than 10 s (`port_down`); no marks for more than 30 s, the capture or the host was not running (`no_marks`); a step of UTC of more than 1 s against the monotonic clock (`utc_step`); a Pi clock not NTP-synchronised or more than 5 s from the collector's, a Pi Node the collector does not know or lost, lines lost across a collector reconnect (`pi_clock`, `collector_node`, `collector_gap`) | always invalidates |
+| `bench` | a port down for more than 10 s, a Pi Node's TCP log link included (the OS drops it 8 s after its last sign of life, or the reader finds no byte for 45 s: `port_down`); no marks for more than 30 s, the capture or the host was not running (`no_marks`); a step of UTC of more than 1 s against the monotonic clock (`utc_step`); a Pi clock not NTP-synchronised or more than 5 s from the collector's, a Pi Node the collector does not know or lost, lines lost across a collector reconnect (`pi_clock`, `collector_node`, `collector_gap`) | always invalidates |
 | `firmware` | lost lines, an unplanned reboot, a board that did not boot the run's Build ID (`lost_lines`, `unplanned_reboot`, `wrong_build`) | fails an acceptance run; invalidates a run whose scenario says `dataset = true` |
 | `node` | a node with no line for longer than the scenario's `max_silence`, with no capture gap in the interval (`node_silent`) | fails the run, even if every expectation was met; never invalidates |
 

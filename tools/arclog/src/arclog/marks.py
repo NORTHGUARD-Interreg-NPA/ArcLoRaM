@@ -7,10 +7,13 @@
 A sidecar, because every tool reads '<UTC>\\t<line>' in the daily files and a third column would break them.
 The marks show a port down (a capture gap, which a quiet node cannot be told from), a step of the host's
 UTC against its monotonic clock (the time service), and a host that was not running (no marks).
+Every 10 s one mark is written, and so is one at every change of a port: a link dropped and recovered between two
+ticks would otherwise leave no trace.
 """
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -57,35 +60,47 @@ class Marks:
         self._file: TextIO | None = None
         self._date = ""
         self._last_mono: float | None = None
+        self._lock = threading.Lock()  # the readers report from their threads, the capture ticks from its own
         out_dir.mkdir(parents=True, exist_ok=True)
 
     def port_up(self, node: str) -> None:
-        self._set(node, True)
+        self._set(node, True, None)
 
-    def port_down(self, node: str) -> None:
-        self._set(node, False)
+    def port_down(self, node: str, since: datetime | None = None) -> None:
+        """`since` dates the outage to when the link was last known alive, which a reader finding it dead after
+        some silence knows and `now` does not."""
+        self._set(node, False, since)
 
-    def _set(self, node: str, up: bool) -> None:
-        """Only a change moves a port's `since`: a reader repeats its state at every retry."""
-        if self._ports[node].up != up:
-            self._ports[node] = PortMark(up, self._now())
+    def _set(self, node: str, up: bool, since: datetime | None) -> None:
+        """Only a change moves a port's `since`: a reader repeats its state at every retry. A change is a mark."""
+        with self._lock:
+            if self._ports[node].up != up:
+                self._ports[node] = PortMark(up, since or self._now())
+                self._write(self._monotonic())
 
     def tick(self) -> None:
         """Write a mark when one is due; the capture calls it often."""
-        mono = self._monotonic()
-        if self._last_mono is not None and mono - self._last_mono < MARK_INTERVAL_S:
-            return
-        self._last_mono = mono
+        with self._lock:
+            mono = self._monotonic()
+            if self._last_mono is None or mono - self._last_mono >= MARK_INTERVAL_S:
+                self._last_mono = mono
+                self._write(mono)
+
+    def _write(self, mono: float) -> None:
         t = self._now()
         date = t.strftime("%Y%m%d")
         if date != self._date:
-            self.close()
+            self._close()
             self._file = (self.out_dir / f"marks-{date}.log").open("a", encoding="utf-8", newline="\n")
             self._date = date
         self._file.write(format_mark(Mark(t, mono, dict(self._ports))) + "\n")
         self._file.flush()
 
     def close(self) -> None:
+        with self._lock:
+            self._close()
+
+    def _close(self) -> None:
         if self._file is not None:
             self._file.close()
             self._file = None

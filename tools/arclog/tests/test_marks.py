@@ -74,26 +74,45 @@ def test_a_port_transition_is_recorded_with_its_time(tmp_path):
     marks.close()
 
     at = lambda s: T0 + timedelta(seconds=s)
-    first, second, third = read_marks(tmp_path / "marks-20261007.log")
+    first, up, second, down, third = read_marks(tmp_path / "marks-20261007.log")
     assert state(first) == {"c3": (False, at(0)), "c2": (False, at(0))}
+    assert (up.utc, state(up)) == (at(3), {"c3": (True, at(3)), "c2": (False, at(0))})
     assert state(second) == {"c3": (True, at(3)), "c2": (False, at(0))}
+    assert (down.utc, state(down)) == (at(15), {"c3": (False, at(15)), "c2": (False, at(0))})
     assert state(third) == {"c3": (False, at(15)), "c2": (False, at(0))}
 
 
-def test_repeating_a_state_keeps_the_time_it_began(tmp_path):
+def test_a_transition_is_a_mark_of_its_own_so_an_outage_between_two_ticks_is_not_lost(tmp_path):
     clock = FakeClock()
     marks = marks_for(tmp_path, clock)
     marks.port_up("c3")
+    marks.tick()
+    clock.advance(3)
+    marks.port_down("c3")   # 3 s into the 10 s between two ticks...
     clock.advance(4)
-    marks.port_up("c3")    # a reader may report a state at every retry or read
-    marks.port_down("c2")  # c2 never came up: down since the start
-    clock.advance(4)
-    marks.port_down("c2")
+    marks.port_up("c3")     # ...and back before the next one
+    clock.advance(3)
     marks.tick()
     marks.close()
 
-    [mark] = read_marks(tmp_path / "marks-20261007.log")
-    assert state(mark) == {"c3": (True, T0), "c2": (False, T0)}
+    seen = [(m.utc, m.ports["c3"].up) for m in read_marks(tmp_path / "marks-20261007.log")]
+    at = lambda s: T0 + timedelta(seconds=s)
+    assert seen == [(at(0), True), (at(0), True), (at(3), False), (at(7), True), (at(10), True)]
+
+
+def test_a_port_found_down_is_dated_to_the_last_time_it_was_known_alive(tmp_path):
+    clock = FakeClock()
+    marks = marks_for(tmp_path, clock)
+    marks.port_up("c3")
+    clock.advance(30)       # a link nobody heard from for 30 s, found dead by its reader
+    marks.port_down("c3", since=T0 + timedelta(seconds=22))
+    clock.advance(5)
+    marks.port_down("c3", since=T0 + timedelta(seconds=35))  # a retry: the outage keeps its beginning
+    marks.tick()
+    marks.close()
+
+    *_, last = read_marks(tmp_path / "marks-20261007.log")
+    assert state(last)["c3"] == (False, T0 + timedelta(seconds=22))
 
 
 def test_marks_follow_the_monotonic_clock_when_utc_is_stepped(tmp_path):
@@ -123,7 +142,7 @@ def test_a_restart_appends_and_leaves_no_mark_for_the_time_it_was_stopped(tmp_pa
     second.tick()
     second.close()
 
-    before, after = read_marks(tmp_path / "marks-20261007.log")
+    *_, before, after = read_marks(tmp_path / "marks-20261007.log")
     assert (after.utc - before.utc).total_seconds() == 300
     assert state(before)["c3"] == (True, T0)
     assert state(after)["c3"] == (False, T0 + timedelta(seconds=300))  # down until its reader reports
