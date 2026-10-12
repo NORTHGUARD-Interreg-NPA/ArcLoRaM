@@ -68,6 +68,8 @@ That needs a second board on the bench as the sender (for example `c3-c2-sync.to
 | 2026-10-12 11:03 | `onboard.toml --as 6` | `3fd1ec7-da86ca4` | PASS | `tools/arclog/runs/20261012T110328Z-3fd1ec7-da86ca4/` | Node 6 on nuna-node-08, a repeat of the 2026-10-10 PASS on a new Build ID. `TX_DONE` at +19.9 s, +173.2 s, +323.5 s; `STOP2_WAKES` at +124.9 s and +280.2 s; resets rebooted both cores (+172.1 s, +322.3 s). No unplanned reboot, no lost line. |
 | 2026-10-12 11:09 | `bench reset 7` | n/a | FAIL (Pi refused the GDB attach) | `tools/arclog/runs/bench/nuna-node-09-20261012.log` | Retry of the guarded reset on Node 7 after the other three runs: `Remote connection closed`, and OpenOCD logged the same `not examined` / `gdb-attach failed`. The refusal is persistent, not a single bad attach. |
 | 2026-10-12 11:15 | `onboard.toml --as 7` | `3fd1ec7-da86ca4` | PASS | `tools/arclog/runs/20261012T111542Z-3fd1ec7-da86ca4/` | Node 7 on nuna-node-09, after Simon restarted that Pi (the board power-cycled with it, and its OpenOCD journal was clean: 26 startup lines, 0 errors). Flash and both-core boot +20.6 s; `TX_DONE` at +21.6 s, +175.4 s, +325.5 s; `STOP2_WAKES` at +128.6 s and +278.5 s; resets rebooted both cores (+174.3 s, +324.4 s). No unplanned reboot, no lost line. The only OpenOCD errors in the capture are `[stm32wlx.cpu1] Debug AP not available, will not halt after reset!`, twice (flash and reset), the same line each healthy Pi logged once at its flash. First PASS of Node 7. |
+| 2026-10-12 14:44 | `node4-link.toml` (a flash of nuna-node-09 as C3) | `3e12e0f-o954ffd` | FAIL to flash (the Pi lost the debug port mid-flash) | `tools/arclog/runs/bench/nuna-node-09-20261012.log` (no run record) | Not an onboarding run: the second case on nuna-node-09. The flash wrote 128 KiB, then `Failed to write memory at 0x2000b698`, `block write failed`, `Error connecting DP: cannot read IDR`, `Examination failed`. The board kept a partial image and looped (`BOOT`, `CORE_SYNC stage=wait_cm0`, a reset every 6 s). See the second case below. |
+| 2026-10-12 15:55 | `bench flash --node 7=C3` | `3e12e0f` | FAIL (smoke check: the first UART line corrupt), board repaired | `tools/arclog/runs/bench/nuna-node-09-20261012.log` | After Simon's power-cycle of that Pi (15:14): the flash and verify were clean (the usual `Debug AP not available` line), and the board booted as C3 on build `3e12e0f` (`BOOT cls=C3 id=7`, `SYNC_TX`, `TX_DONE`). The boot check failed on the CM4's first line, `0 00000T000000.9997 4S A #00 BOOT build=3e12e0f`, the corrupt first line of the 2026-10-10 FAIL row (second time in about 14 boots). |
 
 ## Fleet check, 2026-10-12
 
@@ -90,5 +92,12 @@ Nothing was changed on that Pi by the agent.
 Simon then restarted the Pi (11:12 UTC, the board power-cycled with it): OpenOCD started clean (0 errors), and the onboarding run passed at 11:15 (Runs table).
 The cause of the examination failure is not known, and nothing says it cannot come back: the first sign is `Examination failed` in the Pi's OpenOCD journal or in its `[openocd]` lines in the capture.
 Until then a power-cycle of the Pi is the known remedy.
+
+**Second case, 2026-10-12 14:46 UTC, nuna-node-09 again** (a different signature).
+A flash from this PC lost the debug port in the middle of the write (rows above): the same Pi, 3 h 34 min after Simon's restart of 11:12.
+Its journal showed `openocd.service` restarted 18 times; `Error connecting DP: cannot read IDR` repeated every 5 s.
+The standing remedy, step 1 (`sudo systemctl restart openocd.service` on that Pi, with the login password on stdin through SSH), did **not** clear it: OpenOCD exited at start with the same error, so the service flapped (restart counter 3 after the attempt).
+Step 3 cleared it: Simon hard power-cycled the Pi (about 15:14 UTC; the capture shows the Pi back at 15:15:30), and the flash at 15:55 passed.
+Data for the open question of this section: on this Pi the OpenOCD restart alone has not been enough in either case; the board's own debug port was unreachable in the second one (`cannot read IDR`), not only OpenOCD's examination of the CM4.
 
 Not covered: a read of both cores' liveness through OpenOCD (for example `g_stop2_count` twice), which needs a GDB session outside bench.
