@@ -20,6 +20,10 @@
 #include "tdma_table.h"
 #include "sync_profile.h"   /* SYNC_CELL_GAP_MS, SYNC_TX_BUDGET */
 
+/* The largest packet of each slot of a Sync cell: the Sync packet. Phases whose
+ * cells carry the same packets share one array. */
+static const uint8_t s_sync_slot_lens[] = { (uint8_t)sizeof( SyncPayload_t ) };
+
 /* =========================================================================
  * Two-Sync-phase frame
  *
@@ -45,6 +49,7 @@ static const Phase_t s_sync_phase_0 = {
     .slot_count       = 1u,
     .slot_active_ms   = 2500u,    /* SF12/BW125 Sync packet airtime (conservative) */
     .gap_after_slot_ms = SYNC_CELL_GAP_MS,  /* Inter-cell guard gap */
+    .slot_max_packet_len = s_sync_slot_lens,
     .header           = { .duration_ms = 0u },
     .footer           = { .duration_ms = 0u },
 };
@@ -57,6 +62,7 @@ static const Phase_t s_sync_phase_1 = {
     .slot_count       = 1u,
     .slot_active_ms   = 2500u,    /* SF12/BW125 Sync packet airtime (conservative) */
     .gap_after_slot_ms = SYNC_CELL_GAP_MS,  /* Inter-cell guard gap */
+    .slot_max_packet_len = s_sync_slot_lens,
     .header           = { .duration_ms = 0u },
     .footer           = { .duration_ms = 0u },
 };

@@ -150,6 +150,13 @@ Actual airtime may be shorter as modulation parameters vary, but the alarm chain
 always uses `slot_active_ms` to guarantee no overlap. The next alarm is programmed
 as `slot_start + slot_active_ms + gap_slots_ms[i]`.
 
+### Max Packet Length
+The size in bytes on air of the largest packet a Slot can carry, declared by the TDMA Table for every Slot.
+A Phase lists one value per Slot of its Cell (`slot_max_packet_len`, `slot_count` bytes), so a Cell with a large Data Slot and a small ACK Slot declares both; the Header and the Footer declare their own (`max_packet_len`).
+The TDMA Machine reads it through `TdmaTable_MaxPacketLen` and derives the time on air that ends the Rx Window from it.
+`0` means undeclared; the host test of the real table forbids it for every Slot a Phase has.
+_Avoid_: payload size, expected length
+
 ### Radio State
 The hardware operating state of the radio chip: `Tx | Rx | Sleep`.
 Maps directly to SX127X / STM32WL PHY states. A hardware-layer concept — not to be confused with Phase Type (MAC layer).
@@ -250,7 +257,7 @@ They are equal while the guard is the cap; the Rx Window end uses the maximum gu
 The span during which a synced node listens in an Rx slot.
 It opens at the early wake (current guard) and closes at the **latest packet start**:
 
-  `latest_start = nominal_start + slot_active_ms + MAX_GUARD_TIME_MS − ToA(expected packet)`
+  `latest_start = nominal_start + slot_active_ms + MAX_GUARD_TIME_MS − ToA(Max Packet Length of the slot)`
 
 A packet starting later could not end by `slot end + MAX_GUARD_TIME_MS`, the latest instant that never reaches the next slot whatever guard its nodes apply.
 The window is closed by the radio's own Rx timer, which stops on preamble detection: a packet whose preamble arrives in time is always received in full, a later one is not received.
@@ -258,7 +265,9 @@ A **cap** at `slot end + MAX_GUARD_TIME_MS` aborts any reception still running t
 In `CLOCK_WARM` every packet starts at its nominal start (see Tx Start), so one can only be late by clock error and the window closes at `nominal_start + guard` instead, when that is earlier: an empty window then listens `2 × guard + 262 ms` (the preamble margin the platform adds), where the geometric end made it 1970 ms at a guard of 100 ms.
 A CONTENTION slot keeps the geometric end: its packet starts after channel sensing and a backoff, not at nominal.
 The trace names the guard used (`g`) and the span handed to the radio (`win`) in `RX_WIN`.
-The expected packet is the Sync packet for every slot for now (issue #38).
+The expected packet is the largest the slot can carry: its Max Packet Length, declared by the TDMA Table for the Header, for each Slot of a Cell and for the Footer (ADR-0023).
+A longer packet closes the window earlier, so a reception never runs into the next slot; a shorter one keeps it open longer, so late senders are still heard.
+The length decides the end of the window while the clock is `CLOCK_ACQUIRING`, in a CONTENTION slot, and for a packet near the slot size; a warm clock closes one guard after the nominal start whatever the packet.
 Preamble rather than header detection is a deliberate choice (issue #39): it is the earliest proof of a packet, and the Sync packet will move to implicit header.
 Sync timing does not use the preamble detection time (see SyncStamp).
 The radio's symbol timeout is off: noise never closes a window early.
@@ -308,6 +317,7 @@ struct AnchorSlot {
     SlotKind kind;
     uint32_t bitmap[3];      // [C1, C2, C3]; ignored if kind == CONTENTION
     uint32_t gap_after_ms;   // sleep gap after this slot before the next slot/phase; 0 = none
+    uint8_t  max_packet_len; // largest packet this slot can carry, bytes on air (Max Packet Length)
 };
 
 struct Phase {
@@ -321,6 +331,7 @@ struct Phase {
     uint8_t       cell_count;        // Cell repetitions in this Phase (0-32)
     uint8_t       slot_count;        // Slots per Cell (1–16)
     uint32_t      slot_active_ms;    // worst-case duration of one Slot exchange
+    const uint8_t *slot_max_packet_len; // slot_count entries, by slot index: Max Packet Length of each Slot of a Cell
 
     uint16_t      gap_slots_ms[16];  // network-wide sleep gap after slot i
     AnchorSlot    header;

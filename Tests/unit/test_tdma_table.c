@@ -109,6 +109,98 @@ void test_sync_phase_per_cell_ge_1000ms(void)
     }
 }
 
+/* --- Largest packet per slot (issue #38) ---------------------------------- */
+
+/* The Rx window of a slot closes at the latest start of the largest packet the
+ * slot can carry, so the table says, per slot, how long that packet is. */
+static const uint8_t k_two_slot_lens[] = { 51u, 4u };
+
+void test_a_cell_slot_reports_the_packet_length_declared_for_its_index(void)
+{
+    Phase_t p = { .slot_count = 2u, .slot_max_packet_len = k_two_slot_lens };
+
+    TEST_ASSERT_EQUAL_UINT8(51u, TdmaTable_MaxPacketLen(&p, SLOT_POS_CELL, 0u));
+    TEST_ASSERT_EQUAL_UINT8(4u,  TdmaTable_MaxPacketLen(&p, SLOT_POS_CELL, 1u));
+}
+
+void test_the_header_slot_reports_its_own_packet_length(void)
+{
+    Phase_t p = { .slot_count = 2u, .slot_max_packet_len = k_two_slot_lens,
+                  .header = { .duration_ms = 2500u, .max_packet_len = 10u } };
+
+    TEST_ASSERT_EQUAL_UINT8(10u, TdmaTable_MaxPacketLen(&p, SLOT_POS_HEADER, 0u));
+}
+
+void test_the_footer_slot_reports_its_own_packet_length(void)
+{
+    Phase_t p = { .slot_count = 2u, .slot_max_packet_len = k_two_slot_lens,
+                  .header = { .duration_ms = 2500u, .max_packet_len = 10u },
+                  .footer = { .duration_ms = 2500u, .max_packet_len = 20u } };
+
+    TEST_ASSERT_EQUAL_UINT8(20u, TdmaTable_MaxPacketLen(&p, SLOT_POS_FOOTER, 0u));
+}
+
+/* An undeclared slot reads 0 rather than reading through a missing array: a
+ * field node must not fault on a table mistake (the host check below catches it
+ * before it ships). */
+void test_a_phase_with_no_declared_lengths_reads_zero(void)
+{
+    Phase_t p = { .slot_count = 2u };
+
+    TEST_ASSERT_EQUAL_UINT8(0u, TdmaTable_MaxPacketLen(&p, SLOT_POS_CELL, 0u));
+}
+
+void test_a_slot_index_past_slot_count_reads_zero(void)
+{
+    static const uint8_t lens[] = { 51u, 4u, 99u };
+    Phase_t p = { .slot_count = 2u, .slot_max_packet_len = lens };
+
+    TEST_ASSERT_EQUAL_UINT8(0u, TdmaTable_MaxPacketLen(&p, SLOT_POS_CELL, 2u));
+}
+
+/* The Sync slots expect exactly the packet they carried before the length came
+ * from the table: the 10-byte SyncPayload_t. */
+void test_every_sync_slot_of_the_table_expects_the_sync_packet(void)
+{
+    for (uint8_t i = 0u; i < TdmaTable_PhaseCount(); i++) {
+        const Phase_t *p = TdmaTable_GetPhase(i);
+        if (p->type != PHASE_TYPE_SYNC) continue;
+
+        for (uint8_t s = 0u; s < p->slot_count; s++) {
+            char msg[48];
+            snprintf(msg, sizeof(msg), "phase %u slot %u", i, s);
+            TEST_ASSERT_EQUAL_UINT8_MESSAGE(10u,
+                TdmaTable_MaxPacketLen(p, SLOT_POS_CELL, s), msg);
+        }
+    }
+}
+
+/* A slot left at 0 would get the time on air of an empty packet and a window
+ * far too wide, so a new phase that forgets its lengths must not build green. */
+void test_no_declared_slot_of_the_table_is_left_without_a_packet_length(void)
+{
+    for (uint8_t i = 0u; i < TdmaTable_PhaseCount(); i++) {
+        const Phase_t *p = TdmaTable_GetPhase(i);
+        char msg[48];
+
+        for (uint8_t s = 0u; s < p->slot_count; s++) {
+            snprintf(msg, sizeof(msg), "phase %u cell slot %u", i, s);
+            TEST_ASSERT_NOT_EQUAL_MESSAGE(0u,
+                TdmaTable_MaxPacketLen(p, SLOT_POS_CELL, s), msg);
+        }
+        if (p->header.duration_ms > 0u) {
+            snprintf(msg, sizeof(msg), "phase %u header", i);
+            TEST_ASSERT_NOT_EQUAL_MESSAGE(0u,
+                TdmaTable_MaxPacketLen(p, SLOT_POS_HEADER, 0u), msg);
+        }
+        if (p->footer.duration_ms > 0u) {
+            snprintf(msg, sizeof(msg), "phase %u footer", i);
+            TEST_ASSERT_NOT_EQUAL_MESSAGE(0u,
+                TdmaTable_MaxPacketLen(p, SLOT_POS_FOOTER, 0u), msg);
+        }
+    }
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -125,5 +217,12 @@ int main(void)
     RUN_TEST(test_phase_start_offset_one_is_30000);
     RUN_TEST(test_phase_start_offset_out_of_bounds_returns_zero);
     RUN_TEST(test_sync_phase_per_cell_ge_1000ms);
+    RUN_TEST(test_a_cell_slot_reports_the_packet_length_declared_for_its_index);
+    RUN_TEST(test_the_header_slot_reports_its_own_packet_length);
+    RUN_TEST(test_the_footer_slot_reports_its_own_packet_length);
+    RUN_TEST(test_a_phase_with_no_declared_lengths_reads_zero);
+    RUN_TEST(test_a_slot_index_past_slot_count_reads_zero);
+    RUN_TEST(test_every_sync_slot_of_the_table_expects_the_sync_packet);
+    RUN_TEST(test_no_declared_slot_of_the_table_is_left_without_a_packet_length);
     return UNITY_END();
 }

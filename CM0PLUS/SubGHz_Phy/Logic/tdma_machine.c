@@ -212,9 +212,10 @@ static bool slot_is_contention(const Phase_t *phase)
  * then never reaches the next slot, whatever guard its receivers apply. In
  * CLOCK_WARM every packet starts at nominal (ADR-0016), so one can only be late
  * by clock error: the window closes one guard after nominal instead. The
- * expected packet is the Sync packet in every slot for now (issue #38). The
- * platform aborts any reception still running at the cap (slot end +
- * MAX_GUARD_TIME_MS), e.g. after a false preamble detection.
+ * expected packet is the largest the slot can carry, as the TDMA Table
+ * declares it (TdmaTable_MaxPacketLen, ADR-0023). The platform aborts any
+ * reception still running at the cap (slot end + MAX_GUARD_TIME_MS), e.g.
+ * after a false preamble detection.
  *
  * The trace gives the guard used (g) and the span handed to the radio (win),
  * so that a report can tell a mistimed loss from a radio one. */
@@ -223,7 +224,9 @@ static void open_rx_window(const Phase_t *phase, uint32_t now_ms)
     PROBE_START(win);   /* issue #36: the window's own share of the Rx start latency */
     uint32_t cap_ms   = DayMs_Add(s_slot_start_ms,
                                   (int32_t)(phase->slot_active_ms + MAX_GUARD_TIME_MS));
-    uint32_t toa_ms   = s_platform.RadioTimeOnAir((uint8_t)sizeof(SyncPayload_t));
+    uint32_t toa_ms   = s_platform.RadioTimeOnAir(
+                            TdmaTable_MaxPacketLen(phase, s_cursor.slot_pos,
+                                                   s_cursor.slot_index));
     uint32_t last_ms  = DayMs_Add(cap_ms, -(int32_t)toa_ms);
     uint32_t guard_ms = GuardTimeResolver_GetGuardMs(s_slot_start_ms,
                                                      phase->type == PHASE_TYPE_SYNC);

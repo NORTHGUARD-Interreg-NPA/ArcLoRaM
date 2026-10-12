@@ -20,6 +20,7 @@
 #ifndef TDMA_TABLE_H
 #define TDMA_TABLE_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include "protocol_types.h"
@@ -93,6 +94,38 @@ static inline uint32_t TdmaTable_PhaseDuration_ms( const Phase_t *p )
     }
 
     return d;
+}
+
+/*!
+ * \brief   Return the largest packet, in bytes on air, that a slot can carry.
+ *
+ * \details The Rx window of a slot closes at the latest instant that packet
+ *          can start and still end in time, so the TDMA Machine derives the
+ *          time on air from this length instead of assuming one packet type.
+ *
+ * \param   [in]  p          - Phase descriptor. Must not be NULL.
+ * \param   [in]  pos        - Header, cell or footer slot of the Phase.
+ * \param   [in]  slot_index - Slot within the Cell (cell slots only).
+ *
+ * \retval  uint8_t Length in bytes on air. 0 when the slot declares none: a
+ *          Phase with no \c slot_max_packet_len array, or a \c slot_index past
+ *          \c slot_count. The host test of the real table forbids 0 for every
+ *          slot a Phase has.
+ */
+static inline uint8_t TdmaTable_MaxPacketLen( const Phase_t *p,
+                                              SlotPosition_t pos,
+                                              uint8_t slot_index )
+{
+    if ( pos == SLOT_POS_HEADER ) {
+        return p->header.max_packet_len;
+    }
+    if ( pos == SLOT_POS_FOOTER ) {
+        return p->footer.max_packet_len;
+    }
+    if ( p->slot_max_packet_len == NULL || slot_index >= p->slot_count ) {
+        return 0u;
+    }
+    return p->slot_max_packet_len[slot_index];
 }
 
 /*!

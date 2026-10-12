@@ -279,6 +279,20 @@ add_unity_test(test_tdma_machine_c2_phases
 )
 target_compile_definitions(test_tdma_machine_c2_phases PRIVATE NODE_CLASS=2 GUARD_RX_START_LATENCY_US=0u)
 
+# The expected packet of each slot in its Rx window: sizes from the table (issue #38).
+add_unity_test(test_tdma_machine_c2_toa
+    test_tdma_machine_c2_toa.c
+    stub_drift_estimator.c
+    stub_tdma_table_toa.c
+    ../../CM0PLUS/SubGHz_Phy/Logic/tdma_machine.c
+    ../../CM0PLUS/SubGHz_Phy/Logic/mac_state_machine_c2.c
+    ../../CM0PLUS/SubGHz_Phy/Logic/freq_resolver.c
+    ../../CM0PLUS/SubGHz_Phy/Logic/compliance_engine.c
+    ../../CM0PLUS/SubGHz_Phy/Logic/guard_time_resolver.c
+    ../../Common/SharedMemory/shared_mem.c
+)
+target_compile_definitions(test_tdma_machine_c2_toa PRIVATE NODE_CLASS=2 GUARD_RX_START_LATENCY_US=0u)
+
 add_unity_test(test_tdma_machine_c3
     test_tdma_machine_c3.c
     ../../CM0PLUS/SubGHz_Phy/Logic/tdma_machine.c

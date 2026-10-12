@@ -22,7 +22,7 @@ Deferred (issue #39): stronger proof of a real packet before committing, but a l
 ## Consequences
 
 - **Current guard vs maximum guard.** The early wake uses the current guard; the window end uses `MAX_GUARD_TIME_MS`, a property of the slot grid. They are equal until Guard Time Resolver V2 (#36). _Amended by ADR-0022: in `CLOCK_WARM` the window end follows the current guard; the maximum guard still sets the cap and the geometric end while acquiring._
-- **Expected ToA is the Sync packet's for every slot** until per-slot ToA is derived from the schedule (#38).
+- **Expected ToA is the Sync packet's for every slot** until per-slot ToA is derived from the schedule (#38). _Amended by ADR-0023: the TDMA Table declares the largest packet of each slot and the window end follows it._
 - **Safety cap.** Because the timer stops on preamble, a false detection could hold the receiver; a platform timer aborts any reception still running at `slot end + MAX_GUARD_TIME_MS` (`RX_CAP`).
 - **Preamble detection margin.** The hardware timeout is the latest packet start plus the programmed preamble length (8 symbols, 262 ms), an upper bound on detection time; a packet detected in that margin but too late to fit is aborted by the cap.
 - **Sync packets with a non-Sync phase index are rejected** by the MAC before touching the RTC (`SYNC_REJ`): accepting one would leave the node out of `CLOCK_COLD` with no chain to run.

@@ -168,6 +168,9 @@ typedef struct {
     uint32_t   gap_after_ms; /*!< Sleep gap after this anchor slot before the next
                               *  slot/phase. 0 = none. For a header: gap before
                               *  cell 0. For a footer: gap before the next phase. */
+    uint8_t    max_packet_len; /*!< Largest packet, in bytes on air, this slot can
+                                *  carry. Read it through
+                                *  \ref TdmaTable_MaxPacketLen. */
 } AnchorSlot_t;
 
 /*!
@@ -188,6 +191,11 @@ typedef struct {
                                         *   within a cell. When the current slot is
                                         *   the last in the cell, this gap precedes
                                         *   the next cell (or footer/phase). */
+    const uint8_t  *slot_max_packet_len; /*!< Largest packet, in bytes on air, that
+                                        *   each Slot of a Cell can carry: an array
+                                        *   of \c slot_count entries indexed by the
+                                        *   slot index. Read it through
+                                        *   \ref TdmaTable_MaxPacketLen. */
     AnchorSlot_t    header;           /*!< Optional header slot (absent if duration_ms==0). */
     AnchorSlot_t    footer;           /*!< Optional footer slot (absent if duration_ms==0). */
 } Phase_t;

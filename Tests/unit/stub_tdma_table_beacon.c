@@ -15,6 +15,9 @@
  */
 #include "tdma_table.h"
 
+static const uint8_t s_sync_slot_lens[]   = { (uint8_t)sizeof( SyncPayload_t ) };
+static const uint8_t s_beacon_slot_lens[] = { (uint8_t)sizeof( BeaconPayload_t ) };
+
 static const Phase_t s_beacon = {
     .type             = PHASE_TYPE_MESH_BEACON,
     .participant_mask = PARTICIPANT_C1 | PARTICIPANT_C2 | PARTICIPANT_C3,
@@ -23,6 +26,7 @@ static const Phase_t s_beacon = {
     .slot_count       = 1u,
     .slot_active_ms   = 2500u,
     .gap_after_slot_ms = 500u,
+    .slot_max_packet_len = s_beacon_slot_lens,
     .header           = { .duration_ms = 0u },
     .footer           = { .duration_ms = 0u },
 };
@@ -35,6 +39,7 @@ static const Phase_t s_sync = {
     .slot_count       = 1u,
     .slot_active_ms   = 2500u,
     .gap_after_slot_ms = 500u,
+    .slot_max_packet_len = s_sync_slot_lens,
     .header           = { .duration_ms = 0u },
     .footer           = { .duration_ms = 0u },
 };
