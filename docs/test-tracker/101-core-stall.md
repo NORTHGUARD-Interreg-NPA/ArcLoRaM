@@ -6,7 +6,7 @@ No core may stay down: when either core (CM4 or CM0+) stops, the trace and a rec
 The issue stays open until a real stall is explained by these records, so this Test Record is written for the whole issue and filled slice by slice.
 
 - **Slice 1: the crash record on both cores, the CM4's BusFault/UsageFault/MemManage handlers, and the reset cause in `BOOT`.** They change no behaviour; they cover criteria 1 and 5.
-- **Slice 2: the heartbeat, the checkpoints and the promised wake of each core, watched by the CM4 (the "Core State").** They add a few stores per checkpoint; they cover criteria 3 and 7 and part of 2.
+- **Slice 2: the heartbeat, the checkpoints and the promised wake of each core, watched by the CM4 (the "Core State").** They add a few stores per checkpoint; they cover criteria 2, 3 and 7.
 - Not started: the survivor's report in the other direction and the dead-CM4 case (criterion 4), the audit of the waits (criterion 6), the bad jump (criterion 8), the soak that waits for the next stall (criterion 9).
 
 Clock: NUCLEO (development crystal), not the production TCXO, for every run of this record.
@@ -114,7 +114,7 @@ CM0+ at 4 MHz (`hz=4000000`), NUCLEO Clock, Debug build (no optimisation, `-O0`)
 ## Criteria
 
 - [x] A forced HardFault on the CM0+ and on the CM4 (a Build Override each) leaves a crash record with the PC, LR, xPSR and, on the CM4, the fault status, and a `CORE_CRASH` line at the next `BOOT` (or, for a dead core, the record read by `bench postmortem` of #67). Slice 1: the four `core-stall-crash-*` scenarios, each PASS in Runs (CM4 bus fault `3a9712f-dfe26d7-o485b25`, forced HardFault `-o655361`, data bus error `bef45d4-ob2c30b`, CM0+ `bef45d4-o614be6`). The line comes at the next `BOOT`, the reset being bench's: a halted core cannot print, and the read of a halted core is #67
-- [ ] A forced endless loop at each checkpoint of each core (the Override picks the id) gives a `CORE_STATE` line that names that core and that checkpoint. Slice 2: the mechanism and the report are proven for `rx_set` on the CM0+ (live, from the CM4, and at the next `BOOT`) and for `systick` on the CM4 (at the next `BOOT`); the other ids differ only by the place of the macro and are not each forced yet
+- [x] A forced endless loop at a checkpoint of each core (the Override picks the id) gives a `CORE_STATE` line that names that core and that checkpoint (for a stopped CM4, at the next `BOOT`). Slice 2: `core-stall-state-cm0-loop.toml` (`rx_set` on the CM0+, live from the CM4 and at the next `BOOT`) and `core-stall-state-cm4-loop.toml` (`systick` on the CM4, at the next `BOOT`), each PASS in Runs
 - [x] A forced lost wake (the Override skips one Alarm A programming) gives the alarm checkpoint and an overdue deadline. Slice 2: `core-stall-state-lost-wake.toml`, PASS in Runs (`step=alarm_set`, `over` past the promise, `alive=1`)
 - [ ] A dead CM4 with a live CM0+ is reported as such, not as a silent CM0+. Slice 3
 - [ ] `BOOT` carries the reset cause on both cores, checked after a power cycle, a pin reset and a `bench reset`. Slice 1: `core-stall-reset-cause.toml` for the `bench reset`, and by hand for the power cycle and the pin reset
@@ -157,6 +157,6 @@ CM0+ at 4 MHz (`hz=4000000`), NUCLEO Clock, Debug build (no optimisation, `-O0`)
 ## State after the third session
 
 - Slice 2 is built and its scenarios pass (Runs): a CM0+ stuck at a checkpoint and a lost wake are reported live by the CM4, a CM4 stuck in SysTick by its next `BOOT`; the cost is measured. Criteria 3 and 7 are ticked.
-- Criterion 2 is not ticked: it says "each checkpoint of each core", and two ids were forced (`rx_set`, `systick`). Forcing the other thirteen is a run of about nine minutes each for a result that depends only on where the macro stands; either they are run, or the criterion is reworded to "a checkpoint of each core" with a list of the ids covered.
+- Criterion 2 is ticked after Simon reworded it (2026-10-12) from "each checkpoint of each core" to "a checkpoint of each core"; the issue changed first. Two ids were forced, `rx_set` and `systick`; the other thirteen differ only by the place of the macro.
 - Not done: the power cycle and the NRST press of criterion 5 (hands on the bench).
 - The report of a dead CM4 by the CM0+ (criterion 4) is slice 3: the CM0+ cannot print through a dead CM4, so it is the record in RAM that a post-mortem reads (#67), and #100 for the restart. The CM4 does not yet read the CM0+ record of a crash it did not make.
