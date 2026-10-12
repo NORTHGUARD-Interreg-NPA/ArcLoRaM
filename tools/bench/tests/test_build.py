@@ -9,7 +9,7 @@ from bench import build as build_mod
 from bench.build import (build, config_of, headless_command, new_log_path, parse_log, repo_path)
 from bench.buildid import (build_id, check_overrides, render_overrides_h, write_if_changed)
 from bench.cli import main
-from bench.tree import BuildTree, linked_file_parents, rsync_command
+from bench.tree import BuildTree, linked_file_parents, rsync_command, sync
 from bench.winpath import to_windows, to_wsl
 
 DATA = Path(__file__).parent / "data"
@@ -145,6 +145,18 @@ def test_sync_really_preserves_tree_outputs(tmp_path):
     assert (tree / "Common" / "Bench" / "bench_overrides.h").exists()
     assert not (tree / "stale.c").exists()
     assert not (tree / "tools").exists()
+
+
+def test_sync_marks_the_tree_with_the_checkout_it_was_made_for(tmp_path):
+    """So that `bench prune` of another clone never removes it."""
+    repo = tmp_path / "repo"
+    (repo / "CM4").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    root = tmp_path / "bench"
+
+    sync(repo, root / "tree")
+
+    assert (root / "owner").read_text(encoding="utf-8").strip() == str(repo.resolve())
 
 
 PROJECT_WITH_LINKS = """<?xml version="1.0" encoding="UTF-8"?>

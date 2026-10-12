@@ -6,7 +6,7 @@ description: Build, flash and test the firmware on the bench boards through `too
 # Bench loop
 
 `bench` is the only way to build, flash or reset the firmware (`AGENTS.md`).
-It works on a Build Tree of its own on `C:` (one per worktree) and on the boards of this machine and of its configured Pi Nodes; the developer's CubeIDE can stay open.
+It works on a Build Tree of its own on `C:` (one per worktree; `bench prune` removes those of removed worktrees, and a build does too) and on the boards of this machine and of its configured Pi Nodes; the developer's CubeIDE can stay open.
 Several sessions (worktrees) use the bench at once: a command holds a lease on each board it flashes or resets until it ends, and a board another session holds is refused.
 Command details, the scenario format and the guard live in [`tools/bench/README.md`](../../../tools/bench/README.md); `uv run --project tools/bench bench <cmd> --help` is authoritative for flags.
 Vocabulary (Build ID, Scenario, Run, Action, Smoke Check) is in `tools/bench/CONTEXT.md`.

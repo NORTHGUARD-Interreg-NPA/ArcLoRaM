@@ -12,6 +12,8 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
+from bench.session import OWNER, shared_root
+
 #: Repo top-level directories that are not part of the firmware build: never
 #: synced, and not part of the Build ID either.
 NOT_BUILT = ("tools", "Tests", "docs", ".claude")
@@ -77,3 +79,4 @@ def sync(repo: Path, tree: Path) -> None:
     """Mirror the repo's firmware sources into the Build Tree (uncommitted changes included)."""
     tree.mkdir(parents=True, exist_ok=True)
     subprocess.run(rsync_command(repo, tree), check=True)
+    (tree.parent / OWNER).write_text(f"{shared_root(repo)}\n", encoding="utf-8")
