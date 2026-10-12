@@ -1,5 +1,5 @@
 # Purpose: acceptance. Issue #86, Test Record docs/test-tracker/86-run-validity.md.
-# Two Pi Nodes, about 12 min: Node 4 (nuna-node-04) flashed as the C3, Node 1 (nuna-node-06) only watched. Run twice,
+# Two Pi Nodes, about 10 min: Node 4 (nuna-node-04) flashed as the C3, Node 1 (nuna-node-06) only watched. Run twice,
 # once left alone (it must be valid) and once with Node 1's log link cut for 15 s at +3 min (it must be invalid with
 # a port_down of that Pi Node's log and its interval, whatever else the lost lines add). The cut leaves the board
 # running, so nothing reboots. tools/bench/scripts/cut-link.ps1 makes the cut from this PC and touches no Pi.
