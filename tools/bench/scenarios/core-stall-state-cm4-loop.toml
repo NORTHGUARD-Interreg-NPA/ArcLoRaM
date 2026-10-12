@@ -1,0 +1,31 @@
+# Purpose: acceptance. Issue #101, Test Record docs/test-tracker/101-core-stall.md.
+# Claim: a CM4 stuck at a checkpoint is reported, with that checkpoint, by its own next BOOT.
+# Node 6 (a C2) loops for ever in its SysTick handler (BENCH_LOOP_CM4=35), the context of silence event 4, 60 s after
+# its boot. The CM0+ cannot print for a dead CM4 (its trace goes through it), so the evidence is the record: bench
+# resets the node at +4 min and the BOOT of the CM4 prints the state the previous run left, with the checkpoint.
+description = "A CM4 looping in SysTick is reported by its next BOOT"
+timeout = "8m"
+
+[nodes]
+1 = "C3"
+6 = "C2"
+
+[overrides]
+BENCH_LOOP_CM4 = "35"
+BENCH_FAULT_NODE = "6"
+BENCH_FAULT_AFTER_S = "60"
+
+[[action]]
+reset = 6
+at = "+4m"
+
+[[expect]]
+node = 6
+event = "CORE_STATE"
+where = { core = "cm4", st = "boot", cp = "systick" }
+within = "6m"
+
+[[forbid]]
+node = 1
+event = "CORE_STATE"
+where = { st = "overdue" }

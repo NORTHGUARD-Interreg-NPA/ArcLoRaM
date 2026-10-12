@@ -86,24 +86,59 @@ uint32_t CoreFault_ResetFlags(void);
 void CoreFault_ReportAtBoot(void);
 
 /*!
- * Build Overrides BENCH_FAULT_CM4 / BENCH_FAULT_CM0 (the kind of fault to force on that core),
- * BENCH_FAULT_NODE (the Node ID of the one board to fault: an override reaches every board the run
- * flashes, the C3 too, so a scenario that does not name one faults them all) and BENCH_FAULT_AFTER_S
- * (seconds after boot, default 60): test only, compiled in by
- * no other build. The forced fault does not fire again at the boot that follows it, so the node
- * runs normally after that reset and reports the record it left; a later reset arms it again.
- *   1  an instruction fetch from an address with no memory (IBUSERR on the CM4, as events 3 and 4)
- *   2  an undefined instruction (UNDEFINSTR on the CM4)
- *   3  a data read from an address with no memory (PRECISERR with BFAR on the CM4)
- *   4  as 1 with the BusFault handler off (the CM4 takes the forced HardFault of events 3 and 4)
- * The CM0+ takes a HardFault for all four. Both overrides reach both cores (one override
- * header), so each core acts on its own and ignores the other's.
+ * Build Overrides for the bench (test only, compiled in by no other build). Each acts on one core and
+ * one board, once, \c BENCH_FAULT_AFTER_S seconds (default 60) after the boot of that board:
+ *   BENCH_FAULT_CM4 / BENCH_FAULT_CM0 = <kind>   force a fault in the main loop
+ *       1  an instruction fetch from an address with no memory (IBUSERR on the CM4, as events 3 and 4)
+ *       2  an undefined instruction (UNDEFINSTR on the CM4)
+ *       3  a data read from an address with no memory (PRECISERR with BFAR on the CM4)
+ *       4  as 1 with the BusFault handler off (the CM4 takes the forced HardFault of events 3 and 4)
+ *      The CM0+ takes a HardFault for all four.
+ *   BENCH_LOOP_CM4 / BENCH_LOOP_CM0 = <checkpoint id>   loop for ever at the first pass of that checkpoint
+ *   BENCH_SKIP_ALARM = 1   (CM0+) do not program one Alarm A: a lost wake, the promise still made
+ * BENCH_FAULT_NODE names the one board: an override reaches every board the run flashes, the C3
+ * too, so a scenario that does not name one acts on them all. The forced act does not repeat at the
+ * boot that follows it, so the node runs normally after that reset and reports what it left; a later
+ * reset arms it again. Each core ignores the other's override.
  */
-#if (defined(CORE_CM0PLUS) && defined(BENCH_FAULT_CM0)) || (!defined(CORE_CM0PLUS) && defined(BENCH_FAULT_CM4))
+#if defined(CORE_CM0PLUS)
+#  if defined(BENCH_FAULT_CM0)
+#    define CORE_FAULT_KIND       BENCH_FAULT_CM0
+#  endif
+#  if defined(BENCH_LOOP_CM0)
+#    define CORE_FAULT_LOOP_ID    BENCH_LOOP_CM0
+#  endif
+#  if defined(BENCH_SKIP_ALARM)
+#    define CORE_FAULT_SKIP_ALARM 1
+#  endif
+#else
+#  if defined(BENCH_FAULT_CM4)
+#    define CORE_FAULT_KIND       BENCH_FAULT_CM4
+#  endif
+#  if defined(BENCH_LOOP_CM4)
+#    define CORE_FAULT_LOOP_ID    BENCH_LOOP_CM4
+#  endif
+#endif
+
+#if defined(CORE_FAULT_KIND) || defined(CORE_FAULT_LOOP_ID) || defined(CORE_FAULT_SKIP_ALARM)
 #  define CORE_FAULT_BENCH  1
 void CoreFault_BenchPoll(void);
 #else
 #  define CoreFault_BenchPoll()  ((void)0)
+#endif
+
+#if defined(CORE_FAULT_LOOP_ID)
+/*! Called at every checkpoint: loops for ever at the chosen one, once the time has come. */
+void CoreFault_BenchAt(uint8_t id);
+#else
+#  define CoreFault_BenchAt(id)  ((void)0)
+#endif
+
+#if defined(CORE_FAULT_SKIP_ALARM)
+/*! True once, when the time has come: the caller then does not program its alarm. */
+bool CoreFault_BenchSkipAlarm(void);
+#else
+#  define CoreFault_BenchSkipAlarm()  (false)
 #endif
 
 #endif /* CORE_FAULT_H */

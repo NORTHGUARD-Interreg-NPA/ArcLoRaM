@@ -1,0 +1,33 @@
+# Purpose: acceptance. Issue #101, Test Record docs/test-tracker/101-core-stall.md.
+# Claim: a lost wake is reported with the alarm checkpoint and a wake that is overdue.
+# Node 6 (a C2) skips one Alarm A programming 60 s after its boot (BENCH_SKIP_ALARM=1): the promise of the wake is
+# made and the alarm is not programmed, so the slot task is never run again. The NUCLEO's LED timer still wakes the
+# CM0+, so its heartbeat moves (alive=1) while the promised wake is overdue: the CM4's look prints CORE_STATE
+# st=overdue with the step alarm_set and over > 0. The report of the next BOOT cannot tell a lost wake from a sleep,
+# so it is not expected here. Bench resets the node at +7 min to bring it back.
+description = "A lost Alarm A wake is reported at the alarm checkpoint, overdue"
+timeout = "10m"
+
+[nodes]
+1 = "C3"
+6 = "C2"
+
+[overrides]
+BENCH_SKIP_ALARM = "1"
+BENCH_FAULT_NODE = "6"
+BENCH_FAULT_AFTER_S = "60"
+
+[[action]]
+reset = 6
+at = "+7m"
+
+[[expect]]
+node = 6
+event = "CORE_STATE"
+where = { core = "cm0", st = "overdue", step = "alarm_set", alive = "1", over = { min = 1 } }
+within = "6m"
+
+[[forbid]]
+node = 1
+event = "CORE_STATE"
+where = { st = "overdue" }

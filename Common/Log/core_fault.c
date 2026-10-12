@@ -9,7 +9,7 @@
 #include "arclog.h"
 #include "shared_mem.h"
 #include "stm32wlxx.h"
-#if defined(BENCH_FAULT_CM4) || defined(BENCH_FAULT_CM0)
+#if defined(CORE_FAULT_BENCH)
 #  include "stm32wlxx_hal.h"   /* HAL_GetTick */
 #  include "node_id.h"         /* NodeId_ReadUid, NodeId_FromUid */
 #endif
@@ -150,16 +150,14 @@ void CoreFault_ReportAtBoot(void)
 }
 
 /* =========================================================================
- * Forced faults (Build Overrides, bench only)
+ * Forced faults, loops and lost wakes (Build Overrides, bench only)
  * ========================================================================= */
 
 #if defined(CORE_FAULT_BENCH)
 
 #if defined(CORE_CM0PLUS)
-#  define FORCE_KIND   BENCH_FAULT_CM0
 #  define GATE_INDEX   0
 #else
-#  define FORCE_KIND   BENCH_FAULT_CM4
 #  define GATE_INDEX   1
 #endif
 
@@ -172,7 +170,7 @@ void CoreFault_ReportAtBoot(void)
 /* The time since boot comes from HAL_GetTick, which keeps counting in Stop2 on both cores: the CM0+'s is
  * the monotonic clock of the RTC, the CM4's is a free-running 16-bit LPTIM counter in ms that wraps at
  * 64000 (timer_if.c). The elapsed time is accumulated at each pass, so a pass must come at least once
- * a wrap; a longer gap on the CM4 makes the fault come later. Counting main-loop passes did not work:
+ * a wrap; a longer gap on the CM4 makes the act come later. Counting main-loop passes did not work:
  * the CM4 makes hundreds of them in the first second, before its first line leaves the UART. */
 #if defined(CORE_CM4)
 #  define TICK_WRAP_MS  64000u
@@ -180,11 +178,12 @@ void CoreFault_ReportAtBoot(void)
 
 static bool     s_armed;
 static bool     s_running;      /* the clock started: at the first poll, once the timers are initialised */
+static bool     s_due;          /* the time has come and the act (loop, lost wake) waits for its place */
 static uint32_t s_last_ms;
 static uint32_t s_elapsed_ms;
 
-/* Called at BOOT: only the board named by BENCH_FAULT_NODE is faulted (a Build Override reaches every
- * flashed board of the run, the C3 as well), and a forced fault that already fired in the run before
+/* Called at BOOT: only the board named by BENCH_FAULT_NODE acts (a Build Override reaches every
+ * flashed board of the run, the C3 as well), and an act that already fired in the run before
  * this reset is not repeated. */
 static void bench_arm(void)
 {
@@ -204,6 +203,7 @@ static void bench_arm(void)
     }
 }
 
+#if defined(CORE_FAULT_KIND)
 static void __attribute__((noinline)) force(uint32_t kind)
 {
     switch (kind) {
@@ -226,10 +226,11 @@ static void __attribute__((noinline)) force(uint32_t kind)
         break;
     }
 }
+#endif
 
 void CoreFault_BenchPoll(void)
 {
-    if (!s_armed) {
+    if (!s_armed || s_due) {
         return;
     }
     uint32_t now = HAL_GetTick();
@@ -254,8 +255,36 @@ void CoreFault_BenchPoll(void)
         return;
     }
     s_armed = false;
+#if defined(CORE_FAULT_KIND)
     g_bench_fault_gate[GATE_INDEX] = GATE_FIRED;
-    force(FORCE_KIND);
+    force(CORE_FAULT_KIND);
+#else
+    s_due = true;   /* a loop or a lost wake: it waits for its checkpoint, or its alarm */
+#endif
 }
+
+#if defined(CORE_FAULT_LOOP_ID)
+void CoreFault_BenchAt(uint8_t id)
+{
+    if (s_due && id == (uint8_t)CORE_FAULT_LOOP_ID) {
+        s_due = false;
+        g_bench_fault_gate[GATE_INDEX] = GATE_FIRED;
+        for (;;) {
+        }
+    }
+}
+#endif
+
+#if defined(CORE_FAULT_SKIP_ALARM)
+bool CoreFault_BenchSkipAlarm(void)
+{
+    if (s_due) {
+        s_due = false;
+        g_bench_fault_gate[GATE_INDEX] = GATE_FIRED;
+        return true;
+    }
+    return false;
+}
+#endif
 
 #endif /* CORE_FAULT_BENCH */

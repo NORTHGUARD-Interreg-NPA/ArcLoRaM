@@ -25,6 +25,7 @@
 #include "usart_if.h"
 
 /* USER CODE BEGIN Includes */
+#include "core_cp.h"
 #include "sys_app.h"
 /* USER CODE END Includes */
 
@@ -100,6 +101,7 @@ void PWR_EnterStopMode(void)
   LL_PWR_ClearFlag_C1STOP_C1STB();
 
   /* USER CODE BEGIN EnterStopMode_2 */
+  CORE_CP(CP_CM4_STOP_IN);
   g_stop2_flag = 1;
   /* USER CODE END EnterStopMode_2 */
   HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
@@ -123,6 +125,7 @@ void PWR_ExitStopMode(void)
   /* Resume not retained USARTx and DMA */
   vcom_Resume();
   /* USER CODE BEGIN ExitStopMode_2 */
+  CORE_CP(CP_CM4_STOP_OUT);
 
   /* USER CODE END ExitStopMode_2 */
 }
