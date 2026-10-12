@@ -505,6 +505,20 @@ def cmd_scenario(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_records(args: argparse.Namespace) -> int:
+    """Check that issues, Test Records and scenarios agree: exit 0 ok, 1 findings, 3 no records under the repo."""
+    from bench import records
+
+    repo = Path(args.repo) if args.repo else find_repo(Path.cwd())
+    if not (repo / records.TRACKER).is_dir():
+        print(f"bench records: no {records.TRACKER} under {repo}", file=sys.stderr)
+        return 3
+    found = records.check_repo(repo, (lambda n: records.gh_issue(n, repo)) if args.online else None)
+    for line in records.format_report(repo, found):
+        print(line)
+    return 1 if found else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="bench", description=__doc__)
     p.add_argument("--root", default=os.environ.get("BENCH_ROOT"),
@@ -607,6 +621,14 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--as", dest="as_node", type=int, metavar="ID",
                     help="aim a template scenario (its board under test is node 0) at this Node ID")
     sc.set_defaults(func=cmd_scenario)
+
+    rc = sub.add_parser("records", help="check that every issue, its Test Record and its scenario agree, offline "
+                                        "(--online also reads the issues with gh); exit 0 ok, 1 findings, 3 no records")
+    rc.add_argument("action", choices=["check"])
+    rc.add_argument("--online", action="store_true",
+                    help="also read each acceptance record's issue with `gh`: its criteria are the record's, word for "
+                         "word, and a closed issue has them all ticked")
+    rc.set_defaults(func=cmd_records)
 
     r = sub.add_parser("reset", help="reset boards (no flash)")
     r.add_argument("node_ids", nargs="+", type=int, metavar="NODE_ID")

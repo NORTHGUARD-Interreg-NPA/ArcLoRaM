@@ -241,6 +241,52 @@ A node silent while its port is up is a node fault: a quiet node cannot be told 
 Exit codes of `bench run`, `bench validate` and the collector judge: 0 pass, 1 fail, 2 timeout (the collector judge: no verdict yet), 3 invalid scenario or not a record, 4 invalid run.
 An invalid run has no verdict on the firmware: it stays in the Test Record's Runs table with its cause and is run again.
 
+## Checking the Test Records
+
+```sh
+bench records check              # offline: the records and the scenarios, as text
+bench records check --online     # also reads each acceptance record's issue with `gh`
+bench --repo <dir> records check # another checkout (the tests use a temporary one)
+```
+
+An issue, its Test Record (`docs/test-tracker/`) and its scenario (`tools/bench/scenarios/`) must say the same thing (`docs/test-tracker/README.md`, "Issue, Test Record, scenario").
+`bench records check` reads them as text, touches no board, and prints one line per finding, `<repo-relative file>: <message>`, sorted by file, then a summary line.
+Exit code 0 when there is no finding (`ok: ...`), 1 on any finding, 3 when the repo has no `docs/test-tracker`.
+The check never rewrites a record or a scenario: a finding on a record written before the check is fixed when that record is next touched.
+
+Offline, it checks:
+
+- **File names.**
+  A Markdown file of the tracker is `<issue>-<slug>.md` (acceptance), `perf-<slug>.md` or `spot-<YYYYMMDD>-<slug>.md`; `README.md` and `node-silences.md` are not records.
+  A record has a `## Scenarios` section, a `## Criteria` section and a `## Runs` table with the six columns of the template.
+- **Scenarios table.**
+  Every backticked `*.toml` in the first cell exists, unless the cell says "to write".
+  A cell that names no `.toml` (a `bench build` command, a host test, "none") is not a scenario file and is left alone.
+- **Scenario header.**
+  The leading block of `#` comment lines of a scenario names `Issue #<n>` and `Test Record docs/test-tracker/<file>.md` (the path may wrap onto the next comment line).
+  The record exists, lists the scenario back, and for an acceptance record the issue is its issue.
+- **Round trip.**
+  A record that lists a scenario whose header names another record says so in its row ("shared with `<record>.md`"), and that record lists the scenario too.
+  A scenario with no record in its header is reported once, on the scenario.
+- **Slug.**
+  The scenarios whose header names an acceptance record `<issue>-<slug>.md` are `<slug>.toml` or `<slug>-<variant>.toml`.
+- **Runs rows.**
+  Date: `YYYY-MM-DD HH:MM`; the minute may be imprecise (`17:4x`) and a suffix is free.
+  Scenario: a backticked `*.toml` that exists, or free text for a flags form or a host test.
+  Build ID: `<commit>[-d<hash>][-o<hash>]`, a list of them, or `none`, `n/a`, `(several)`.
+  Verdict: starts with PASS, FAIL, invalid, measurement, red, running or outage, or counts runs (`48 of 48 pass`).
+  Record: a `tools/arclog/runs/` path, or `none`.
+- **Done means a PASS.**
+  A record with at least one criterion, every one ticked, has a Runs row whose verdict starts with PASS (or counts only passes).
+
+With `--online` it also reads the issue of every acceptance record, `gh issue view <n> --json number,state,body` run in the repo (the tracker is the clone's default repo for `gh`):
+
+- The issue's acceptance criteria are the checklist under `## Acceptance criteria` in its body; the `> Copied from ...` lines a copied issue starts with are ignored.
+- "Word for word" means the issue's criterion, whitespace normalised, is the start of the record's criterion: the record may append its evidence after ticking.
+  An issue criterion with no such record criterion, and a record criterion that starts with no issue criterion, are findings.
+- A closed issue has every criterion of its record ticked.
+- An issue with no such checklist, or one `gh` cannot read, is a finding too.
+
 ## Map
 
 ```sh
@@ -344,6 +390,7 @@ Commands:
 | `bench capture up` / `status` | Starts or checks the always-on capture of every board |
 | `bench map` | Draws the connected boards, local and on Pi Nodes, and whether each is free (`--open` opens the page) |
 | `bench choose` | Opens a page where the user picks the class of each board and the overrides, and prints the answer as options for `run` |
+| `bench records check` | Checks, without a board, that every issue, its Test Record and its scenario agree (`--online` reads the issues with `gh`) |
 
 A quick run without a scenario file uses the same machinery:
 

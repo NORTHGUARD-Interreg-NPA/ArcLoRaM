@@ -1,0 +1,1 @@
+{"number": 7, "state": "OPEN", "body": "> Copied from [ArcLoRaM/firmware#7](https://github.com/ArcLoRaM/firmware/issues/7). Opened on 2026-09-27 11:06 UTC.\n\n---\n\n## Problem\n\nThe widget never locks.\n\n## Acceptance criteria\n\n- [ ] The widget locks within 5 min.\n- [ ] The slow variant locks within 20\n  min.\n\n## Blocked by\n\n- [ ] #3 is not a criterion\n"}
