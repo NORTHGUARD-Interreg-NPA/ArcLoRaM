@@ -43,6 +43,13 @@ No CubeMX regeneration in Phase 1.
 - [ ] Dataset (raw captures, per-reception CSVs, manifest) and report under `docs/experiments/<date>-phase1-baseline/`; firmware commit tagged `phase1-baseline`.
 - [ ] Questions Phase 1 could not answer listed for Phase 2.
 
+## Also scored in this session: #60
+
+Decision 2026-10-12 (Simon, comments on #76 and #60): the 24 h capture check of #60 "Multi-port capture in one process" is done in this session, not on its own.
+During the session the always-on capture stays running and untouched (no `bench capture up --replace`, no restart) and the host stays on AC power with sleep off.
+The criteria of `60-multi-port-capture-24h.md` are scored on this session's capture files, and #60 is closed from this run.
+A replug of a node is a planned event noted in the manifest (`bench note`): it is the replug step of #60 too.
+
 ## Runs
 
 | Date (UTC) | Scenario | Build ID | Verdict | Record | Notes |

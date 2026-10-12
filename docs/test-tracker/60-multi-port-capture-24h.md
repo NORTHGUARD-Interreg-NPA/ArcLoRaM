@@ -4,6 +4,16 @@ Purpose: acceptance. Issue: #60 (open, deferred: not urgent as of 2026-10-02).
 
 Code done (`4f71ff3`, `1fc6e1f`); a reset check passed on 2026-09-29. Left: the issue's 24 h criterion.
 
+## Schedule
+
+Decision 2026-10-12 (Simon, comments on #60 and #76): the 24 h check is done inside the session of #76 "Phase 1 baseline test", with its 4 to 5 active nodes, and not on its own.
+Until then boards are unplugged and replugged while iterating, which would only break a 24 h window.
+When the baseline starts, the always-on capture stays running and untouched for the whole session (no `bench capture up --replace`, no restart), the host stays on AC power with sleep off, and the criteria below are scored on the capture files of that session.
+
+This record is stale for Pi Nodes and is rewritten before then: it still names three USB boards (COM6, COM8, COM9), a USB replug of the COM6 board and a `SLOT` every 3 s.
+A lone C3 now logs a `SLOT` about every 20 s and the Pi a `[pi]` heartbeat line, so the gap rule takes each port's cadence from its first hour.
+The marks do not show a dead TCP link as down (see "Finding" in #86 "Run manifest and validity check for long runs"): the first 1.5 h of the capture of 2026-10-12 give a first data point (resets of four boards, one Pi outage logged once in `capture.err`), kept in the run records of that day.
+
 ## Scenarios
 
 No scenario file: the check is on the always-on capture itself (`bench capture`), not on a `bench run`.
