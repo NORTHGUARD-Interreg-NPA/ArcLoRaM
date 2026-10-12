@@ -134,6 +134,30 @@ def test_never_booting_the_expected_build_fails_the_smoke_check():
     assert verdict.reason == "smoke check: n2 no BOOT on core 0,4 with build=b1 (last booted build=old)"
 
 
+def test_each_board_has_the_smoke_window_from_the_end_of_its_own_flash():
+    # Boards are flashed one after the other (about 20 s each on a Pi Node): the second flash ends 40 s after the
+    # run started, and its boot comes after the 30 s the first board had. It must not fail for that.
+    t = Trace()
+    t.boot(22, "n1")
+    t.boot(43, "n2")
+    nodes = {"n1": {"since": (SINCE + timedelta(seconds=20)).isoformat()},
+             "n2": {"since": (SINCE + timedelta(seconds=40)).isoformat()}}
+    verdict, msgs = decide(spec(nodes=nodes), t, end=100)
+    assert verdict.code == PASS
+    assert any(m.startswith("ok   run armed") for m in msgs)
+
+
+def test_a_board_that_does_not_boot_within_the_window_of_its_own_flash_still_fails():
+    t = Trace()
+    t.boot(22, "n1")
+    nodes = {"n1": {"since": (SINCE + timedelta(seconds=20)).isoformat()},
+             "n2": {"since": (SINCE + timedelta(seconds=40)).isoformat()}}
+    assert decide(spec(nodes=nodes), t, end=65)[0] is None   # 30 s after 40 s is 70 s
+    verdict, _ = decide(spec(nodes=nodes), t, end=71)
+    assert verdict.code == FAIL
+    assert verdict.reason == "smoke check: n2 no BOOT on core 0,4 with build=b1"
+
+
 def test_firmware_without_the_bench_hook_is_named():
     t = Trace()
     t.emit(1, "n2", "4", "BOOT")

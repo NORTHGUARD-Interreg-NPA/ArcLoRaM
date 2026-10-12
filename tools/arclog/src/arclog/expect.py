@@ -42,8 +42,9 @@ lines (sequence gaps), a schema problem (unknown event, missing field,
 unregistered board), a forbidden event, an expectation missing its
 `within`, or the Smoke Check failing.
 
-Smoke Check, per flashed node within `smoke_window` of `since`: armed, CM4
-`CORE_SYNC stage=linked` after its BOOT, and `cls` as specified.
+Smoke Check, per flashed node within `smoke_window` of the end of its own flash
+(its `since`, else the run's): armed, CM4 `CORE_SYNC stage=linked` after its BOOT,
+and `cls` as specified.
 
 Pass (exit 0): no failure, every expectation met, smoke passed, and
 `min_duration` elapsed. Timeout (exit 2): `timeout` elapsed first.
@@ -518,6 +519,13 @@ class Run:
                 missing.append(f"{st.spec.name} no CORE_SYNC stage=linked")
         return missing
 
+    def _smoke_deadline(self) -> datetime:
+        """Boards are flashed one after the other (about 20 s each on a Pi Node), so each has `smoke_window`
+        from the end of its own flash, not from the start of the run: the later flash must not use up the
+        window of the later boot."""
+        ends = [st.spec.since for st in self._nodes.values() if st.spec.flashed and st.spec.since is not None]
+        return max([self.since, *ends]) + self.spec.smoke_window
+
     def _expects_missing(self) -> list[str]:
         return [f"{e.describe()} ({self._count(i)}/{e.count})"
                 for i, e in enumerate(self.spec.expects) if self._count(i) < e.count]
@@ -536,7 +544,7 @@ class Run:
             if not missing:
                 self._smoke_done = True
                 self.report(f"ok   smoke check {self._at(now)}")
-            elif now >= self.since + self.spec.smoke_window:
+            elif now >= self._smoke_deadline():
                 self._fail("smoke check: " + "; ".join(missing))
                 return self.verdict
         if self.armed_at is not None:
