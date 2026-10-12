@@ -7,7 +7,8 @@ sending its last image's Sync. So a run has a channel of its own:
 - The plan (range, raster, spacing, default) is read from the firmware's own header,
   Common/Protocol/channel_plan.h: there is no second copy to keep in step.
 - The channel of a run is its Build Override FREQ_DEFAULT_HZ, else the default. A value outside the plan is
-  refused before anything is built.
+  refused before anything is built. Its power is RADIO_TX_POWER_DBM, else 14 dBm; more than that is allowed
+  on the high-power channel (869.5 MHz, 10 % duty cycle, 500 mW) only, as in the firmware's own #error.
 - The channel is leased: exclusive on its own slot, shared on every plan slot closer than the spacing
   (ADR-0003 leases, ids `channel-<kHz>`). Two sessions therefore never share a channel and never sit closer
   than the spacing. Taking is never blocking; the refusal names who holds what.
@@ -39,8 +40,10 @@ OVERRIDE = "FREQ_DEFAULT_HZ"
 AIR_WINDOW = timedelta(minutes=20)
 _TAIL_BYTES = 256 * 1024
 
-_CONSTANTS = ("CHANNEL_MIN_HZ", "CHANNEL_MAX_HZ", "CHANNEL_RASTER_HZ", "CHANNEL_SPACING_HZ", "CHANNEL_DEFAULT_HZ")
-_DEFINE_RE = re.compile(r"^\s*#\s*define\s+(" + "|".join(_CONSTANTS) + r")\s+(\d+)[uUlL]*\s*(?:/\*.*)?$", re.M)
+_CONSTANTS = ("CHANNEL_MIN_HZ", "CHANNEL_MAX_HZ", "CHANNEL_RASTER_HZ", "CHANNEL_SPACING_HZ", "CHANNEL_DEFAULT_HZ",
+              "CHANNEL_HIGH_POWER_HZ", "RADIO_TX_POWER_DEFAULT_DBM", "RADIO_TX_POWER_LIMIT_DBM",
+              "RADIO_TX_POWER_MAX_DBM", "RADIO_TX_POWER_MIN_DBM")
+_DEFINE_RE = re.compile(r"^\s*#\s*define\s+(" + "|".join(_CONSTANTS) + r")\s+\(?(-?\d+)[uUlL]*\)?\s*(?:/\*.*)?$", re.M)
 _HZ_RE = re.compile(r"^\s*(\d+)(?:[uU][lL]{0,2}|[lL]{1,2}[uU]?)?\s*$")
 _ID_RE = re.compile(r"^channel-(\d+)$")
 
@@ -52,6 +55,15 @@ class ChannelPlan:
     raster_hz: int
     spacing_hz: int
     default_hz: int
+    high_power_hz: int
+    power_default_dbm: int
+    power_limit_dbm: int
+    power_max_dbm: int
+    power_min_dbm: int
+
+    def channels(self) -> list[int]:
+        """Every channel of the plan, ascending: the raster from min to max, and the high-power channel."""
+        return [*range(self.min_hz, self.max_hz + 1, self.raster_hz), self.high_power_hz]
 
 
 def parse_plan(text: str) -> ChannelPlan:
@@ -60,7 +72,9 @@ def parse_plan(text: str) -> ChannelPlan:
     if missing:
         raise ValueError(f"{PLAN_HEADER}: no #define of {', '.join(missing)}")
     return ChannelPlan(found["CHANNEL_MIN_HZ"], found["CHANNEL_MAX_HZ"], found["CHANNEL_RASTER_HZ"],
-                       found["CHANNEL_SPACING_HZ"], found["CHANNEL_DEFAULT_HZ"])
+                       found["CHANNEL_SPACING_HZ"], found["CHANNEL_DEFAULT_HZ"], found["CHANNEL_HIGH_POWER_HZ"],
+                       found["RADIO_TX_POWER_DEFAULT_DBM"], found["RADIO_TX_POWER_LIMIT_DBM"],
+                       found["RADIO_TX_POWER_MAX_DBM"], found["RADIO_TX_POWER_MIN_DBM"])
 
 
 def load_plan(repo: Path) -> ChannelPlan:
@@ -85,13 +99,38 @@ def channel_of(overrides: Mapping[str, str], plan: ChannelPlan) -> int:
     if OVERRIDE not in overrides:
         return plan.default_hz
     hz = parse_hz(overrides[OVERRIDE])
+    if hz == plan.high_power_hz:
+        return hz
     if not plan.min_hz <= hz <= plan.max_hz:
         raise ValueError(f"{OVERRIDE}={overrides[OVERRIDE]}: {mhz(hz)} is outside the channel plan "
-                         f"({mhz(plan.min_hz)} to {mhz(plan.max_hz)}, channel_plan.h)")
+                         f"({mhz(plan.min_hz)} to {mhz(plan.max_hz)}, or {mhz(plan.high_power_hz)}; channel_plan.h)")
     if hz % plan.raster_hz:
         raise ValueError(f"{OVERRIDE}={overrides[OVERRIDE]}: {mhz(hz)} is not a multiple of "
                          f"{plan.raster_hz // 1000} kHz (channel_plan.h)")
     return hz
+
+
+POWER_OVERRIDE = "RADIO_TX_POWER_DBM"
+_DBM_RE = re.compile(r"^\s*\(?\s*(-?\d+)\s*\)?\s*$")
+
+
+def power_of(overrides: Mapping[str, str], channel_hz: int, plan: ChannelPlan) -> int:
+    """The power (dBm) a build with these overrides transmits at on this channel. More than the 25 mW limit
+    is refused off the high-power channel, as the firmware's own header refuses it."""
+    if POWER_OVERRIDE not in overrides:
+        return plan.power_default_dbm
+    m = _DBM_RE.match(overrides[POWER_OVERRIDE])
+    if not m:
+        raise ValueError(f"{POWER_OVERRIDE}={overrides[POWER_OVERRIDE]!r} is not a power in dBm (a whole number)")
+    dbm = int(m[1])
+    if not plan.power_min_dbm <= dbm <= plan.power_max_dbm:
+        raise ValueError(f"{POWER_OVERRIDE}={dbm}: the board does {plan.power_min_dbm} to {plan.power_max_dbm} dBm "
+                         f"(channel_plan.h)")
+    if dbm > plan.power_limit_dbm and channel_hz != plan.high_power_hz:
+        raise ValueError(f"{POWER_OVERRIDE}={dbm}: more than {plan.power_limit_dbm} dBm (25 mW) is allowed on "
+                         f"{mhz(plan.high_power_hz)} only (10 % duty cycle, 500 mW sub-band); {mhz(channel_hz)} "
+                         f"stops at {plan.power_limit_dbm} dBm")
+    return dbm
 
 
 # --- the lease -----------------------------------------------------------------------------------------------------
@@ -102,9 +141,7 @@ def _slot(hz: int) -> str:
 
 def channel_ids(hz: int, plan: ChannelPlan) -> tuple[str, list[str]]:
     """(the channel's own lease id, the ids of the plan slots closer than the spacing)."""
-    steps = plan.spacing_hz // plan.raster_hz - 1
-    near = (hz + k * plan.raster_hz for k in range(-steps, steps + 1) if k)
-    return _slot(hz), [_slot(f) for f in sorted(near) if plan.min_hz <= f <= plan.max_hz]
+    return _slot(hz), [_slot(f) for f in plan.channels() if f != hz and abs(f - hz) < plan.spacing_hz]
 
 
 @contextmanager
@@ -122,7 +159,7 @@ def _hz_of(slot: str) -> int:
 
 def held_channels(leases: Leases, plan: ChannelPlan) -> dict[int, str]:
     """The channels another session holds now (not their guard slots), and who."""
-    ids = [_slot(f) for f in range(plan.min_hz, plan.max_hz + 1, plan.raster_hz)]
+    ids = [_slot(f) for f in plan.channels()]
     return {_hz_of(slot): who for slot, who in leases.exclusive_holders(ids).items()}
 
 
@@ -196,11 +233,11 @@ def air_conflicts(channel_hz: int, on_air: Mapping[str, Transmitter], plan: Chan
 
 
 def free_channels(plan: ChannelPlan, in_use: list[int]) -> list[int]:
-    """The plan channels a megahertz or more from every channel in use: the default first, then the others
-    from the top of the plan down (the lower channels are the ones nobody uses yet)."""
-    clear = [f for f in range(plan.min_hz, plan.max_hz + 1, plan.raster_hz)
-             if all(abs(f - used) >= plan.spacing_hz for used in in_use)]
-    return sorted(clear, key=lambda f: (f != plan.default_hz, -f))
+    """The plan channels a megahertz or more from every channel in use: the default first, then the ordinary
+    ones from the top down (the lower channels are the ones nobody uses yet), the high-power channel last
+    (it is for a run that raises its power, not a place to hide)."""
+    clear = [f for f in plan.channels() if all(abs(f - used) >= plan.spacing_hz for used in in_use)]
+    return sorted(clear, key=lambda f: (f != plan.default_hz, f == plan.high_power_hz, -f))
 
 
 @dataclass

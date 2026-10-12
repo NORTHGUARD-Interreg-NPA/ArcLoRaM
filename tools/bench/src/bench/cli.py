@@ -73,10 +73,11 @@ def _claim_channel(stack: ExitStack, repo: Path, leases: Leases, overrides: dict
     from datetime import datetime, timezone
 
     from bench.channels import (AirBusy, channel_of, free_channels, held_channels, hold_channel, judge_air,
-                                load_plan, mhz, observe_transmitters)
+                                load_plan, mhz, observe_transmitters, power_of)
 
     plan = load_plan(repo)
     hz = channel_of(overrides, plan)
+    dbm = power_of(overrides, hz, plan)
     stack.enter_context(hold_channel(leases, hz, plan))
     mine_sn = {b.sn for b in mine}
     others = [b for b in found if b.sn not in mine_sn and b.node]
@@ -84,7 +85,7 @@ def _claim_channel(stack: ExitStack, repo: Path, leases: Leases, overrides: dict
     holders = leases.holders([b.sn for b in others])
     verdict = judge_air(hz, plan, on_air, {b.node: _label(b) for b in others}, {b.node for b in mine},
                         {b.node: holders[b.sn] for b in others if b.sn in holders})
-    print(f"channel {mhz(hz)}")
+    print(f"channel {mhz(hz)} at {dbm} dBm")
     for line in verdict.warn:
         print(f"air: {line}")
     if verdict.refuse:
@@ -583,12 +584,15 @@ def cmd_note(args: argparse.Namespace) -> int:
     return 0
 
 
-def _scenario_channel(args: argparse.Namespace, s) -> int:
-    """The channel a scenario's Build Overrides put it on; ValueError when it is outside the channel plan."""
-    from bench.channels import channel_of, load_plan
+def _scenario_channel(args: argparse.Namespace, s) -> tuple[int, int]:
+    """(channel Hz, power dBm) a scenario's Build Overrides put it on; ValueError when either is outside the
+    channel plan, or when the power is more than the channel allows."""
+    from bench.channels import channel_of, load_plan, power_of
 
     repo = Path(args.repo) if getattr(args, "repo", None) else find_repo(Path.cwd())
-    return channel_of(s.overrides, load_plan(repo))
+    plan = load_plan(repo)
+    hz = channel_of(s.overrides, plan)
+    return hz, power_of(s.overrides, hz, plan)
 
 
 def cmd_scenario(args: argparse.Namespace) -> int:
@@ -597,12 +601,12 @@ def cmd_scenario(args: argparse.Namespace) -> int:
 
     try:
         s = load_as(args.file, args.as_node)[0] if args.as_node is not None else load(args.file)
-        hz = _scenario_channel(args, s)
+        hz, dbm = _scenario_channel(args, s)
     except (OSError, ValueError) as exc:
         print(f"{args.file}: {exc}", file=sys.stderr)
         return 3
     print(plan(s))
-    print(f"channel: {mhz(hz)}")
+    print(f"channel: {mhz(hz)} at {dbm} dBm")
     return 0
 
 

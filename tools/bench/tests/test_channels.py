@@ -7,6 +7,7 @@ import pytest
 
 from bench.channels import (
     ChannelPlan,
+    power_of,
     Transmitter,
     air_conflicts,
     channel_of,
@@ -24,7 +25,8 @@ from bench.lease import Held, Leases
 
 REPO = Path(__file__).resolve().parents[3]
 PLAN = ChannelPlan(min_hz=865_100_000, max_hz=868_500_000, raster_hz=100_000, spacing_hz=1_000_000,
-                   default_hz=868_300_000)
+                   default_hz=868_300_000, high_power_hz=869_500_000, power_default_dbm=14, power_limit_dbm=14,
+                   power_max_dbm=22, power_min_dbm=-9)
 NOW = datetime(2026, 10, 12, 16, 30, tzinfo=timezone.utc)
 
 
@@ -214,7 +216,7 @@ def test_the_free_channels_are_the_default_first_when_nothing_is_in_use():
 
 
 def test_a_plan_full_of_traffic_has_no_free_channel():
-    assert free_channels(PLAN, [865_100_000, 866_100_000, 867_100_000, 868_100_000, 868_500_000]) == []
+    assert free_channels(PLAN, [865_100_000, 866_100_000, 867_100_000, 868_100_000, 869_500_000]) == []
 
 
 LABELS = {"nuna-node-06": "nuna-node-06 (Node ID 1)", "nuna-node-08": "nuna-node-08 (Node ID 6)",
@@ -239,3 +241,57 @@ def test_boards_of_the_run_and_boards_a_megahertz_away_say_nothing():
     on_air = {"nuna-node-04": Transmitter(868_300_000, NOW), "nuna-node-08": Transmitter(867_300_000, NOW)}
     air = judge_air(868_300_000, PLAN, on_air, LABELS, mine={"nuna-node-04"}, held={})
     assert air.refuse == [] and air.warn == []
+
+
+
+# --- the high-power channel and the power of a run (issue #85) -------------------------------------------------------
+
+def test_the_high_power_channel_is_a_channel_of_the_plan_off_the_raster_range():
+    assert channel_of({"FREQ_DEFAULT_HZ": "869500000u"}, PLAN) == 869_500_000
+
+
+def test_the_channels_of_the_plan_are_the_raster_and_the_high_power_one():
+    assert PLAN.channels()[0] == 865_100_000 and PLAN.channels()[-2:] == [868_500_000, 869_500_000]
+    assert len(PLAN.channels()) == 36
+
+
+def test_the_high_power_channel_has_no_guard_and_the_highest_normal_channel_does_not_reach_it():
+    own, guard = channel_ids(869_500_000, PLAN)
+    assert own == "channel-869500" and guard == []
+    assert "channel-869500" not in channel_ids(868_500_000, PLAN)[1]      # exactly a megahertz: clear
+
+
+def test_the_high_power_channel_coexists_with_the_default_one(tmp_path):
+    with hold_channel(leases(tmp_path, "desk"), 868_300_000, PLAN):
+        with hold_channel(leases(tmp_path, "far"), 869_500_000, PLAN):
+            pass
+
+
+def test_no_power_override_is_the_default_power():
+    assert power_of({}, 868_300_000, PLAN) == 14
+    assert power_of({"FREQ_DEFAULT_HZ": "867300000u"}, 867_300_000, PLAN) == 14
+
+
+def test_the_power_override_is_read_as_a_c_integer_in_dbm():
+    assert power_of({"RADIO_TX_POWER_DBM": "22"}, 869_500_000, PLAN) == 22
+    assert power_of({"RADIO_TX_POWER_DBM": " 14 "}, 868_300_000, PLAN) == 14
+    assert power_of({"RADIO_TX_POWER_DBM": "(-9)"}, 868_300_000, PLAN) == -9
+
+
+@pytest.mark.parametrize("value", ["22.5", "high", "", "0x16", "22dBm"])
+def test_a_power_that_is_not_a_number_is_refused(value):
+    with pytest.raises(ValueError, match="dBm"):
+        power_of({"RADIO_TX_POWER_DBM": value}, 869_500_000, PLAN)
+
+
+@pytest.mark.parametrize("value", ["23", "-10", "100"])
+def test_a_power_outside_the_range_of_the_board_is_refused(value):
+    with pytest.raises(ValueError, match="-9 to 22"):
+        power_of({"RADIO_TX_POWER_DBM": value}, 869_500_000, PLAN)
+
+
+@pytest.mark.parametrize("channel", [868_300_000, 867_300_000, 865_100_000, 868_500_000])
+def test_more_than_14_dbm_is_refused_anywhere_but_on_the_high_power_channel(channel):
+    with pytest.raises(ValueError, match="869.5 MHz"):
+        power_of({"RADIO_TX_POWER_DBM": "15"}, channel, PLAN)
+    assert power_of({"RADIO_TX_POWER_DBM": "14"}, channel, PLAN) == 14

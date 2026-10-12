@@ -407,12 +407,17 @@ A board lease keeps two sessions off one board; it says nothing about the air.
 Two runs on disjoint boards still hear each other on one channel, a C2 locks to whichever C3 it hears first, and an idle board keeps sending the Sync of its last image.
 So a run has a channel of its own (issue #85).
 
-- **The plan** is in the firmware, `Common/Protocol/channel_plan.h`, and bench reads it from there: channels on a 100 kHz raster from 865.1 to 868.5 MHz (the 1 % / 25 mW sub-bands the Compliance Engine knows), 868.3 MHz by default, and two sessions **1 MHz apart** at least (the Semtech SX1261/2 summary gives 88 dB of blocking immunity at 1 MHz; no figure was found for a closer offset).
-  Four channels fit: 865.3, 866.3, 867.3 and 868.3 MHz.
+- **The plan** is in the firmware, `Common/Protocol/channel_plan.h`, and bench reads it from there: channels on a 100 kHz raster from 865.1 to 868.5 MHz (the 1 % / 25 mW sub-bands), 868.3 MHz by default, and 869.5 MHz (the 10 % / 500 mW one), and two sessions **1 MHz apart** at least (the Semtech SX1261/2 summary gives 88 dB of blocking immunity at 1 MHz; no figure was found for a closer offset).
+  Five channels fit together: 865.3, 866.3, 867.3, 868.3 and 869.5 MHz.
 - **A run moves to another channel** with the Build Override `FREQ_DEFAULT_HZ` (`[overrides] FREQ_DEFAULT_HZ = "867300000u"` or `-D FREQ_DEFAULT_HZ=867300000u`).
   Every phase takes it (the discovery channel and the fallback too), all boards of the run get it, and the Build ID carries it.
   A value outside the plan is refused before the build (`bench scenario check` exits 3), and so is a firmware build with one (`#error`).
   The name is not about Sync: today every phase uses the one channel; when phases get channels of their own, this stays the default of those that do not.
+- **Power follows the channel.** The Build Override `RADIO_TX_POWER_DBM` sets the power of the radio and of the request to the Compliance Engine (14 dBm by default, the 25 mW limit of the sub-bands the plan covers).
+  More than 14 dBm exists on **one channel only: 869.5 MHz**, the middle of ETSI sub-band P (869.4 to 869.65 MHz: 10 % duty cycle, 500 mW ERP), where the board's high-power amplifier may run at its maximum, 22 dBm.
+  The firmware's header refuses (`#error`) any other combination, `bench scenario check` exits 3 on it before a build, and the Compliance Engine knows both rows (it refuses 22 dBm at 868.3 MHz and grants it at 869.5 MHz).
+  869.5 MHz is 1.2 MHz from 868.3 MHz, so a run on it coexists with the desk.
+  The 22 dBm is the conducted power; the antenna gain must stay under 5 dB for the 27 dBm ERP.
 - **The channel is leased** like a board (ADR-0003): exclusive on its own slot, shared on every plan slot closer than 1 MHz.
   `bench run` and `bench flash` hold it until they end; a second session on the same channel, or closer than 1 MHz, is refused at once and told who holds what.
 - **The air is read from the capture.** A board's last `SYNC_TX` says which channel it is on, so a session on older code (it takes no channel lease) and an idle board (it keeps sending its last image) are seen too.

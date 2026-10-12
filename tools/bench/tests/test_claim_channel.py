@@ -98,3 +98,27 @@ def test_a_held_board_a_megahertz_away_is_no_conflict(tmp_path, capture):
     other = Leases(tmp_path / "leases", "101-crash-record", "bench run core-stall.toml")
     with other.hold(exclusive=[OTHER.sn]):
         assert claim(tmp_path, {"FREQ_DEFAULT_HZ": "867300000u"}) == 867_300_000
+
+
+def test_a_run_says_its_channel_and_power(tmp_path, capture, capsys):
+    claim(tmp_path, {"FREQ_DEFAULT_HZ": "869500000u", "RADIO_TX_POWER_DBM": "22"})
+    assert "channel 869.5 MHz at 22 dBm" in capsys.readouterr().out
+
+
+def test_more_than_the_limit_off_the_high_power_channel_stops_the_command(tmp_path, capture):
+    with pytest.raises(ValueError, match="869.5 MHz"):
+        claim(tmp_path, {"FREQ_DEFAULT_HZ": "867300000u", "RADIO_TX_POWER_DBM": "22"})
+
+
+def test_scenario_check_refuses_it_with_exit_3_and_accepts_the_high_power_channel(tmp_path, capsys):
+    from bench.cli import main
+
+    bad = tmp_path / "bad.toml"
+    bad.write_text('[nodes]\n2 = "C3"\n[overrides]\nRADIO_TX_POWER_DBM = "22"\n', encoding="utf-8")
+    assert main(["--repo", str(REPO), "scenario", "check", str(bad)]) == 3
+    assert "869.5 MHz" in capsys.readouterr().err
+    good = tmp_path / "good.toml"
+    good.write_text('[nodes]\n2 = "C3"\n[overrides]\nFREQ_DEFAULT_HZ = "869500000u"\nRADIO_TX_POWER_DBM = "22"\n',
+                    encoding="utf-8")
+    assert main(["--repo", str(REPO), "scenario", "check", str(good)]) == 0
+    assert "channel: 869.5 MHz at 22 dBm" in capsys.readouterr().out
