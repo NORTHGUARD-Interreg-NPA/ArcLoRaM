@@ -96,7 +96,24 @@ rm -f "$S/askpass.sh"
 ```
 
 The Pi runs two systemd units: `openocd.service` (GDB 3333, the M0+ on 3334, config `/etc/openocd/rpi-swd.cfg`) and `uart-log.service` (the UART log on TCP 4000).
-Look first (`systemctl status`, `journalctl -u openocd`); change nothing on the Pi unless Simon asks.
+Look first (`systemctl status`, `journalctl -u openocd`); change nothing on the Pi unless Simon asks, bar the standing remedy of "OpenOCD never examines the CM4" below.
 A raw TCP connect to port 3333 is a GDB connection for OpenOCD (one at a time): probe with `bench boards`, not with `/dev/tcp`.
 After a Pi power-up the board is held in reset (#103 "A Pi Node board stays held in reset"): a zero UID, a silent trace and a dead LED, with GPIO18 low on the Pi.
 Run `bench reset <Node ID>` first; it releases the board, and the next `bench flash` passes.
+
+## OpenOCD never examines the CM4 (standing remedy)
+
+Seen on nuna-node-09 on 2026-10-12; the case and its run records are in the Fleet check of `docs/test-tracker/spot-20261010-onboard-board.md`.
+The signature is a Pi Node whose `bench flash`, `reset` or `run` fails with `Remote communication error. Target disconnected` or `Remote connection closed`, while its trace keeps flowing and its `[openocd]` lines in the capture (or `journalctl -u openocd`) repeat `Failed to read memory at 0xe000ef40`, `[stm32wlx.cpu0] Examination failed` and `not examined`.
+A silent trace is the other problem (#103 above).
+
+Simon decided on 2026-10-12 that the agent tries the fix first and asks for a hard power-cycle second:
+
+1. Restart OpenOCD on that Pi: SSH as above, then `sudo -S systemctl restart openocd.service` with the login password on stdin (`sudo` asks for it; that this login's password works there is not tried yet).
+   Change that one service on that one Pi.
+2. Done when the new `openocd.service` run shows its startup lines and no `Error:` for a minute, and `bench reset <Node ID>` returns without error.
+   Then run the command that failed again.
+3. When the errors come back or the reset still fails, invite Simon to hard power-cycle that Pi (unplug and replug its power; the board power-cycles with it, which is what cleared the first case).
+   A software reboot of the Pi stays Simon's call.
+
+Report which step cleared it, and add the case to the Test Record's Fleet check: that is the data that says whether the OpenOCD restart alone is enough.
