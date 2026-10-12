@@ -378,10 +378,15 @@ CSV_COLUMNS = [
 ]
 
 
-def to_csv(run: RunResult) -> str:
+ALIGNED_COLUMNS = ["dev_aligned", "dev_basis"]
+
+
+def to_csv(run: RunResult, aligned: dict | None = None) -> str:
+    """One row per received Sync packet. With `aligned` (id of a line -> Placed, from devicetime.align) the rows end
+    in the packet's time on the C3's device axis and its basis (`device` or `host`)."""
     out = io.StringIO()
     wr = csv.writer(out, lineterminator="\n")
-    wr.writerow(CSV_COLUMNS)
+    wr.writerow(CSV_COLUMNS + (ALIGNED_COLUMNS if aligned is not None else []))
     for nr in run.nodes:
         for r in nr.rx:
             ln = r.rx
@@ -399,5 +404,7 @@ def to_csv(run: RunResult) -> str:
                 t.plan if t and t.plan is not None else "",
                 start if start is not None else "",
                 st - start if st is not None and start is not None else "",
+                *([aligned[id(ln)].time.isoformat() if id(ln) in aligned and aligned[id(ln)].time else "",
+                   aligned[id(ln)].basis if id(ln) in aligned else ""] if aligned is not None else []),
             ])
     return out.getvalue()

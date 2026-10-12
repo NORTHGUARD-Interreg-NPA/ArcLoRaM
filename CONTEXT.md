@@ -793,6 +793,22 @@ The 32.768 kHz crystal of the NUCLEO development board (NDK NX3215SA): +-20 ppm 
 The bench boards carry it, and it is the clock of every bench result until the production hardware is on the bench: a result, a record or an ADR that comes from it says "NUCLEO".
 Its figures do not transfer to the Production Clock (a calibration residual, a drift rate, a temperature behaviour).
 
+### Time Axes
+Three times stamp a trace line, and each is good for one thing.
+"Clock" is reserved for oscillators (Production Clock, NUCLEO Clock, Monotonic Clock); these are times, read off the lines of a trace.
+
+| Axis | Is | Good for | Not for |
+|---|---|---|---|
+| **Controller Time** | when the host received the line (`arclog` capture prefix) | roughly when; a node that has no Device Time yet; outage and gap detection | the order of two nodes' events: it follows the 9600-baud transmission of the line and the trace queue, so one event differs by a median of 75 ms (69 to 216 ms) between two nodes (eight Sync packets of a C3 and a locked C2, 2026-10-04) |
+| **Device Time** | the RTC reading the node logged with the event, taken when the event is logged | the order of events inside one node; across nodes once they are locked to the C3: the same eight packets differ by a median of 2.7 ms (2.4 to 4.4 ms) | a node that is not locked: its RTC is its own |
+| **Protocol Time** | the epoch, phase and cell of the Sync schedule (`ep`, `ph`, `ce`; Sync Phase Epoch) | naming a packet and pairing its TX and RX, whatever the other two say | a moment of the lab: it counts from the Sync Phase Epoch the C3 captured |
+
+The **Reference Axis** is the Device Time of the C3, and a node is on it from its `CLK to=WARM` on (the C3 itself from its BOOT).
+A jump of the RTC (`RTC_SET`, `d=` in ms, reported modulo a day) is bridged: the lines logged before it in the same interval move by the jump, so the interval reads as one continuous clock.
+A reboot ends a node's interval, and a reboot of the C3 starts a new Reference Axis.
+A line outside an interval is placed by Controller Time and marked.
+`arclog merge --by device` and the device-aligned time of `arclog report` do this; `--by host` (Controller Time) stays the default until the device order is proven on a long run.
+
 ### Sync Profile
 The compile-time choice of how often the network synchronises: `DEV` (the default; a Sync phase every 200 s, one packet per node per phase, inside the duty-cycle budget, for work that assumes synchronised clocks), `PROD` (the product period derived from the drift bound, provisional until the Production Clock is measured, #112) and `BRINGUP` (the former 30 s schedule, host tests only).
 It also fixes the Sync Silence Timeout. A trace names it in the `BOOT` line (`sync=`).

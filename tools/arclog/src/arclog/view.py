@@ -110,6 +110,27 @@ def format_line(line: Line, color: bool = False, show_node: bool = True, note: s
     return f"{DIM}{text}{RESET}" if color else text
 
 
+def format_placed(placed, color: bool = False, show_node: bool = True, note: str = "") -> str:
+    """One line of `merge --by device`: [node] the time on the C3's device axis, a mark, then the line.
+
+    The mark is blank when the node is locked (its own clock, on the axis) and `~` when the line is placed by
+    controller time (before the lock, after a reboot, no usable device time)."""
+    line = placed.line
+    node = f"{line.node:<4} " if show_node and line.node else ""
+    t = placed.time.strftime("%y%m%d %H:%M:%S.%f")[:-2] if placed.time else "------ --:--:--.----"
+    mark = "~" if placed.basis == "host" else " "
+    if line.kind is Kind.ARCLOG:
+        head = f"{line.core}{line.mod} {line.level} #{line.seq:02x}"
+        body = " ".join(f"{k}={v}" for k, v in line.fields.items())
+        text = f"{node}{t} {mark} {head} {line.event:<14} {body}" + (f"  {note}" if note else "")
+        return text if not color else f"{DIM}{node}{t} {mark}{RESET} {MODULE_COLORS.get(line.mod, '')}{head}{RESET} " \
+            f"{(RED + BOLD) if line.event in ALERT_EVENTS or _is_loss(line) else BOLD}{line.event:<14}{RESET} {body}" \
+            + (f"  {YELLOW}{note}{RESET}" if note else "")
+    tag = "LEGACY" if line.kind is Kind.LEGACY else "RAW"
+    text = f"{node}{t} {mark} {tag:<6} {line.text}" + (f"  {note}" if note else "")
+    return f"{DIM}{text}{RESET}" if color else text
+
+
 def _is_loss(line: Line) -> bool:
     return (line.event == "CLK" and line.get("to") == "COLD") or (
         line.event == "SYNC_RX" and line.get("act") == "t3"

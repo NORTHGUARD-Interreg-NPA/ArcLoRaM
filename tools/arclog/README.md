@@ -99,6 +99,24 @@ Each received Sync packet (`SYNC_RX`) is matched to the transmission it came fro
 uv run arclog merge runs/2026-09-25/*.log --mod Y,R
 ```
 
+`--by device` orders the lines of all nodes on the C3's device time instead (default `--by host`, until the device order is proven on a long run).
+The three time axes, and what each is good for:
+
+| Axis | Is | Good for |
+|---|---|---|
+| controller time | when the host received the line | roughly when; a node with no usable device time. It follows the 9600-baud transmission and the trace queue: the same event differs by a median of 75 ms (69 to 216 ms) between two nodes |
+| device time | the RTC reading the node logged with the event | order inside a node; across nodes once they are locked to the C3: a median of 2.7 ms (2.4 to 4.4 ms) on the same eight packets |
+| protocol time | the epoch, phase and cell of the Sync schedule (`ep`, `ph`, `ce`) | naming a packet and pairing its TX and RX (this is how `merge` matches them) |
+
+A node is on the C3's axis from its `CLK to=WARM` on (the C3 itself from its `BOOT`), until it leaves WARM, reboots, or the C3 reboots; a clock jump (`RTC_SET`, `d=`) is bridged, so an interval reads as one continuous clock.
+Every other line is placed by controller time and marked `~`.
+The first column is the time on the axis; `--ref NODE` names the C3 when the capture has no `BOOT cls=C3` (or several).
+`CONTEXT.md` ("Time Axes") has the definitions; `devicetime.py` the rules.
+
+```sh
+uv run arclog merge runs/2026-10-04/c3-*.log runs/2026-10-04/c2-*.log --by device --event TX_DONE,RX_DONE
+```
+
 ### report
 
 Sync run report: acquisitions, drops to CLOCK_COLD, tier decisions, error statistics, drift in ppm, preamble-detection diagnostics, cross-node offsets and trace health.
@@ -109,6 +127,8 @@ uv run arclog report runs/2026-09-25/*.log -o docs/experiments/2026-09-25-c3-c2.
 ```
 
 Daily files of the same node are concatenated automatically.
+
+When the capture has a C3, the CSV ends in `dev_aligned` (the packet's time on the C3's device axis) and `dev_basis` (`device`, or `host` for a packet received before the lock).
 
 The trace health table gives each node's Node ID from its CM0+ `BOOT` line.
 A board missing from the Node ID table boots with `id=0`; `view`, `merge` and `report` flag that `BOOT` line with the entry to add to `Common/Protocol/node_id.c`.

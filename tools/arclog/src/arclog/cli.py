@@ -105,10 +105,21 @@ def _streams(files: list[str]) -> dict[str, list[Line]]:
 
 def cmd_merge(args: argparse.Namespace) -> int:
     from arclog.merge import merge, pair_notes
-    from arclog.view import annotate
+    from arclog.view import annotate, format_placed
 
     streams = _streams(args.files)
-    merged = merge(streams.values())
+    placed = None
+    if args.by == "device":
+        from arclog.devicetime import align
+
+        try:
+            placed = align(streams, ref=args.ref)
+        except ValueError as exc:
+            print(f"arclog merge: {exc}", file=sys.stderr)
+            return 2
+        merged = [p.line for p in placed]
+    else:
+        merged = merge(streams.values())
     notes = pair_notes(merged)
     flt = _filter(args)
     color = use_color(sys.stdout, args.color)
@@ -118,24 +129,32 @@ def cmd_merge(args: argparse.Namespace) -> int:
         for line, note in annotate(stream):
             if note:
                 health[id(line)] = note
-    for line in merged:
+    for i, line in enumerate(merged):
         if flt.accepts(line):
             note = " ".join(n for n in (health.get(id(line)), notes.get(id(line))) if n)
-            print(format_line(line, color=color, note=note))
+            print(format_placed(placed[i], color=color, note=note) if placed else format_line(line, color=color, note=note))
     return 0
 
 
 def cmd_report(args: argparse.Namespace) -> int:
     from arclog.report import analyse, to_csv, to_markdown
 
-    run = analyse(_streams(args.files), sf=args.sf, bw_hz=args.bw, preamble=args.preamble)
+    streams = _streams(args.files)
+    run = analyse(streams, sf=args.sf, bw_hz=args.bw, preamble=args.preamble)
+    aligned = None
+    try:
+        from arclog.devicetime import align
+
+        aligned = {id(p.line): p for p in align(streams)}
+    except ValueError:
+        pass    # no C3 in the capture: there is no reference axis, and the CSV has no aligned columns
     md = to_markdown(run, title=args.title)
     if args.out:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(md, encoding="utf-8", newline="\n")
         csv_path = out.with_suffix(".csv")
-        csv_path.write_text(to_csv(run), encoding="utf-8", newline="\n")
+        csv_path.write_text(to_csv(run, aligned), encoding="utf-8", newline="\n")
         print(f"arclog: wrote {out} and {csv_path}", file=sys.stderr)
     else:
         sys.stdout.write(md)
@@ -206,6 +225,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     m = sub.add_parser("merge", help="interleave several nodes on one timeline, pairing Sync packets")
     m.add_argument("files", nargs="+")
+    m.add_argument("--by", choices=["host", "device"], default="host",
+                   help="order by the host's receive time (default) or by the C3's device time: a node is on it from "
+                        "its CLK to=WARM on, its other lines are placed by host time and marked ~")
+    m.add_argument("--ref", help="the C3 node name for --by device (default: the first node that booted as a C3)")
     _add_filter_args(m)
     m.set_defaults(func=cmd_merge)
 
