@@ -42,7 +42,7 @@ lines (sequence gaps), a schema problem (unknown event, missing field,
 unregistered board), a forbidden event, an expectation missing its
 `within`, or the Smoke Check failing.
 
-Smoke Check, per flashed node within `smoke_window` of `since`: armed, CM4
+Smoke Check, per flashed node within `smoke_window` of the end of its own flash (its `since`, else the run's): armed, CM4
 `CORE_SYNC stage=linked` after its BOOT, and `cls` as specified.
 
 Pass (exit 0): no failure, every expectation met, smoke passed, and
@@ -504,6 +504,12 @@ class Run:
 
     # -- clock --------------------------------------------------------------
 
+    def _smoke_deadline(self) -> datetime:
+        """When the smoke check gives up. Boards are flashed one after the other, so each one's window starts
+        when its own flash ended (its `since`); the check is over when the last board's window is."""
+        flashed = [st.spec.since or self.since for st in self._nodes.values() if st.spec.flashed]
+        return max([self.since, *flashed]) + self.spec.smoke_window
+
     def _smoke_missing(self) -> list[str]:
         missing = []
         for st in self._nodes.values():
@@ -536,7 +542,7 @@ class Run:
             if not missing:
                 self._smoke_done = True
                 self.report(f"ok   smoke check {self._at(now)}")
-            elif now >= self.since + self.spec.smoke_window:
+            elif now >= self._smoke_deadline():
                 self._fail("smoke check: " + "; ".join(missing))
                 return self.verdict
         if self.armed_at is not None:

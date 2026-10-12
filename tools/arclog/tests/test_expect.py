@@ -134,6 +134,32 @@ def test_never_booting_the_expected_build_fails_the_smoke_check():
     assert verdict.reason == "smoke check: n2 no BOOT on core 0,4 with build=b1 (last booted build=old)"
 
 
+def at(seconds: float) -> str:
+    return (SINCE + timedelta(seconds=seconds)).isoformat()
+
+
+def test_each_board_has_the_smoke_window_from_the_end_of_its_own_flash():
+    # Boards are flashed one after the other (about 15 s each on a Pi Node): n2's flash ends at +5 s, n3's at +20 s.
+    # n3 boots 15 s after its own flash, 35 s after the run began: its window runs to +50 s, not to +30 s.
+    # (2026-10-12, nuna-node-04 as the second board: BOOT at +30.3 s, the run was failed at +30.0 s, twice.)
+    t = Trace()
+    t.boot(8, "n2")
+    t.boot(35, "n3", id="3")
+    s = spec(nodes={"n2": {"since": at(5)}, "n3": {"since": at(20)}})
+    verdict, msgs = decide(s, t, end=60)
+    assert verdict.code == PASS
+    assert "ok   n3 armed (both cores booted build=b1) +35.3s" in msgs
+
+
+def test_a_board_that_never_boots_fails_when_its_own_window_is_over():
+    t = Trace()
+    t.boot(8, "n2")
+    s = spec(nodes={"n2": {"since": at(5)}, "n3": {"since": at(20)}})
+    assert decide(s, t, end=45)[0] is None          # n2's window is over, n3's runs to +50 s
+    verdict, _ = decide(s, t, end=51)
+    assert verdict.code == FAIL and verdict.reason.startswith("smoke check: n3 no BOOT on core 0,4")
+
+
 def test_firmware_without_the_bench_hook_is_named():
     t = Trace()
     t.emit(1, "n2", "4", "BOOT")
