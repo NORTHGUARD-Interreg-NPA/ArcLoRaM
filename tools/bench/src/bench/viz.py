@@ -9,10 +9,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from html import escape
+from typing import Mapping
 from urllib.parse import urlsplit
 
 from bench.boards import Board, format_uid
 from bench.config import Remote
+from bench.channels import Transmitter, mhz
+from bench.positions import Positions, RadioModel, links as place_links
 
 TITLE = "Bench Map"
 
@@ -25,31 +28,70 @@ def capture_owner(out: str) -> str:
     return "main" if parts[-3:] == ["arclog", "runs", "bench"] else out
 
 
+def _place_entry(positions: Positions | None, uid: str | None) -> dict | None:
+    """Where a board stands: its own place or the default one; None when positions say nothing of it."""
+    if positions is None or uid is None:
+        return None
+    place = positions.place_of(uid)
+    if place is None:
+        return None
+    return {"name": place.name, "lat": place.lat, "lon": place.lon, "alt": place.alt, "own": uid in positions.boards}
+
+
+def _air_entry(on_air: Mapping[str, Transmitter] | None, node: str | None) -> dict | None:
+    """The channel a board was last heard sending Sync on (from the shared capture), and when."""
+    tx = (on_air or {}).get(node) if node else None
+    if tx is None:
+        return None
+    return {"mhz": mhz(tx.freq_hz), "freq_hz": tx.freq_hz, "last_tx": f"{tx.last_tx:%H:%M} UTC"}
+
+
 def snapshot(boards: list[Board], down: list[Remote], held: dict[str, str], worktree: str,
-             now: datetime, elsewhere: dict[str, str] | None = None) -> dict:
+             now: datetime, elsewhere: dict[str, str] | None = None, positions: Positions | None = None,
+             model: RadioModel | None = None, on_air: Mapping[str, Transmitter] | None = None,
+             channels: Mapping[int, str] | None = None, unknown_positions: list[str] | None = None) -> dict:
     """Plain data for the map. `held` maps a board id to who holds it (see Leases.holders); `elsewhere`
-    maps a board id to the session whose capture records it (a session without leases shows only there)."""
+    maps a board id to the session whose capture records it (a session without leases shows only there);
+    `positions` adds each board's place and the links between places (issue #85)."""
     entries = []
     for b in boards:
         status = "held" if b.sn in held else ("free" if b.node_id is not None else "new")
+        uid = format_uid(b.uid) if b.uid else None
         entries.append({
             "id": b.sn,
             "kind": "pi-node" if b.remote else "st-link",
             "where": urlsplit(b.port).netloc if b.remote else (b.port or "no COM port"),
             "node_id": b.node_id,
-            "uid": format_uid(b.uid) if b.uid else None,
+            "uid": uid,
             "uid_source": b.uid_source or None,
             "build": b.build,
             "status": status,
             "held_by": held.get(b.sn),
             "capture_elsewhere": (elsewhere or {}).get(b.sn),
+            "place": _place_entry(positions, uid),
+            "on_air": _air_entry(on_air, b.node),
         })
     return {
         "generated": now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "worktree": worktree,
         "boards": entries,
         "not_answering": [{"id": r.name, "where": f"{r.host}:{r.log}"} for r in down],
+        "links": _link_entries(boards, positions, model or RadioModel()),
+        "channels": [{"mhz": mhz(hz), "held_by": who} for hz, who in sorted((channels or {}).items())],
+        "unknown_positions": list(unknown_positions or []),
     }
+
+
+def _link_entries(boards: list[Board], positions: Positions | None, model: RadioModel) -> list[dict]:
+    """The links between boards that stand in different places, nearest first. Boards in one place
+    (most of a bench stands at the default place) make no link worth showing."""
+    if positions is None:
+        return []
+    named = {format_uid(b.uid): (b.sn if b.remote else (b.port or b.sn)) for b in boards if b.uid}
+    out = [{"a": named[l.a], "b": named[l.b], "distance_m": l.distance_m,
+            "expected_rssi_dbm": l.expected_rssi_dbm, "expected_snr_db": l.expected_snr_db}
+           for l in place_links(positions, list(named), model) if not l.colocated]
+    return sorted(out, key=lambda e: e["distance_m"])
 
 
 _STATE_TEXT = {"free": "free", "held": "held", "new": "new board", "not answering": "not answering"}
@@ -81,6 +123,7 @@ body { background: var(--bg); color: var(--ink); font: 15px/1.45 var(--sans); ma
        padding-inline: 16px; padding-block: 28px 40px; }
 .wrap { max-width: 980px; margin: 0 auto; display: grid; gap: 24px; }
 h1 { font: 600 1.55rem/1.2 var(--mono); letter-spacing: -0.01em; margin: 0; }
+h2.sec { font: 600 0.78rem var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px; }
 .meta { color: var(--muted); font-size: 0.9rem; margin: 6px 0 0; }
 .meta b { color: var(--ink); font-weight: 600; }
 .pc { justify-self: center; text-align: center; background: var(--panel); border: 1.5px solid var(--line);
@@ -113,6 +156,11 @@ dt { color: var(--muted); }
 dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
 .who { font-size: 0.82rem; color: var(--held); overflow-wrap: anywhere; }
 .none { color: var(--muted); text-align: center; border: 1.5px dashed var(--line); border-radius: 10px; padding: 16px; font-size: 0.9rem; }
+table.links { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+table.links th, table.links td { text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--line); }
+table.links th { color: var(--muted); font-weight: 600; }
+table.links td { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.links-note { color: var(--muted); font-size: 0.82rem; margin: 6px 0 0; }
 .legend { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--muted); font-size: 0.85rem; align-items: center; }
 .legend span { display: inline-flex; gap: 8px; align-items: center; }
 footer { color: var(--muted); font-size: 0.85rem; }
@@ -135,6 +183,13 @@ def _card(entry: dict) -> str:
         rows.append(("uid", f'{entry["uid"][:8]}…{entry["uid"][-4:]} ({entry["uid_source"]})'))
     if entry.get("build"):
         rows.append(("build", entry["build"]))
+    place = entry.get("place")
+    if place:
+        label = place["name"] or f'{place["lat"]:.5f}, {place["lon"]:.5f}'
+        rows.append(("at", label + ("" if place["own"] else " (default)")))
+    air = entry.get("on_air")
+    if air:
+        rows.append(("on air", f'{air["mhz"]}, last Sync {air["last_tx"]}'))
     rows.append(("id", entry["id"]))
     dl = "".join(f"<dt>{escape(k)}</dt><dd>{escape(v)}</dd>" for k, v in rows)
     who = f'<div class="who">held by {escape(entry["held_by"])}</div>' if entry.get("held_by") else ""
@@ -157,6 +212,34 @@ def _branch(title: str, cards: list[str], empty: str) -> str:
     return f'<section class="branch"><h2>{escape(title)}</h2>{body}</section>'
 
 
+def _links_section(snap: dict) -> str:
+    """The expected links between places; nothing at all when no board has a place or all stand in one."""
+    links = snap.get("links") or []
+    if not links:
+        return ""
+    rows = "".join(
+        f'<tr><td>{escape(l["a"])} - {escape(l["b"])}</td><td>{l["distance_m"]:.0f} m</td>'
+        f'<td>{l["expected_rssi_dbm"]:.0f} dBm</td><td>{l["expected_snr_db"]:.0f} dB</td></tr>' for l in links)
+    return ('<section><h2 class="sec">Expected links</h2><table class="links"><thead><tr><th>Link</th><th>Distance</th>'
+            f'<th>Expected RSSI</th><th>Expected SNR</th></tr></thead><tbody>{rows}</tbody></table>'
+            '<p class="links-note">A ceiling: free space at the configured power, no antenna gain. '
+            'Read it against the RSSI and SNR a run measures.</p></section>')
+
+
+def _air_section(snap: dict) -> str:
+    """The channels a session holds, and the positions no board has; nothing when there is nothing to say."""
+    parts = []
+    if snap.get("channels"):
+        rows = "".join(f'<tr><td>{escape(c["mhz"])}</td><td>{escape(c["held_by"])}</td></tr>' for c in snap["channels"])
+        parts.append('<section><h2 class="sec">Channels in use</h2><table class="links"><thead><tr><th>Channel</th>'
+                     f'<th>Held by</th></tr></thead><tbody>{rows}</tbody></table>'
+                     '<p class="links-note">A run takes its channel and keeps 1 MHz from the others.</p></section>')
+    if snap.get("unknown_positions"):
+        uids = ", ".join(escape(u) for u in snap["unknown_positions"])
+        parts.append(f'<p class="links-note">Position with no board (UID not in node_id.c): {uids}</p>')
+    return "".join(parts)
+
+
 def render_html(snap: dict, fragment: bool = False) -> str:
     """The page. `fragment` leaves out the document wrapper, for a host that adds its own."""
     boards, down = snap["boards"], snap["not_answering"]
@@ -175,7 +258,8 @@ def render_html(snap: dict, fragment: bool = False) -> str:
                     f'{escape(snap["worktree"])}</div></div>'
                     f'<div class="branches">'
                     f'{_branch("USB · ST-LINK probes", local, "No ST-LINK probe connected")}'
-                    f'{_branch("Tailnet · Pi Nodes", remote, "No Pi Node configured")}</div>')
+                    f'{_branch("Tailnet · Pi Nodes", remote, "No Pi Node configured")}</div>'
+                    f'{_links_section(snap)}{_air_section(snap)}')
     legend = "".join(f'<span><i class="pill" data-state="{k}">{escape(v)}</i>{escape(t)}</span>' for k, v, t in (
         ("free", "free", "ready for a run"), ("held", "held", "another session works on it"),
         ("new", "new board", "UID not in the Node ID table yet"), ("not answering", "not answering", "Pi Node unreachable")))

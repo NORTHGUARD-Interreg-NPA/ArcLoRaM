@@ -50,6 +50,9 @@ Every run, whatever its purpose (acceptance, performance or spontaneous), leaves
    A board with an unknown UID is a new board: `--probe-uid <id>` reads that one (a Pi Node: a GDB session; an ST-LINK board: it reboots), then add it to `Common/Protocol/node_id.c` with the next free Node ID.
    A node whose capture file has had no new line for over 60 s while its port answers is a node silence: add a row to `docs/test-tracker/node-silences.md` (the fourth gets an investigation), then reset it.
    Done when every Node ID the scenario names is listed and free; a scenario that needs a board `bench boards` does not list says so, it is not cut down.
+   **The air is shared too.** `bench boards` shows each board's channel (`on air 867.3 MHz`) and the channels a session holds (`channel ... HELD by`).
+   A run is on 868.3 MHz unless its Build Override `FREQ_DEFAULT_HZ` says otherwise (`-D FREQ_DEFAULT_HZ=867300000u`; the plan is 865.1 to 868.5 MHz on a 100 kHz raster, in `Common/Protocol/channel_plan.h`), and two sessions stay 1 MHz apart: if another session's boards are on your channel, take one `bench` suggests, do not pass `--share-air` on your own.
+   An idle board keeps sending its last image's Sync: it is said (`air:`), it cannot be silenced from here.
 3. **Run.** `bench run <scenario>`: it builds the working tree (uncommitted changes included), flashes, fires the actions and decides.
    Done when it exits: 0 PASS, 1 FAIL, 2 TIMEOUT, 3 invalid scenario, 4 invalid run.
 4. **Read the verdict**, then fix and go back to 3:

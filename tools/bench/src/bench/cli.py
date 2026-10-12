@@ -50,8 +50,53 @@ def _leases(repo: Path, args: argparse.Namespace) -> Leases:
     return Leases(lease_dir(repo), worktree=worktree_name(repo), command=getattr(args, "command_text", "bench"))
 
 
-def _held_note(exc: Held) -> str:
+def _held_note(exc: Held, repo: Path | None = None) -> str:
+    if repo is not None and any(slot.startswith("channel-") for slot in exc.busy):
+        from bench.channels import describe_busy, load_plan
+
+        return (f"{describe_busy(exc.busy, load_plan(repo))} - another session is on that channel: "
+                f"pick another with -D FREQ_DEFAULT_HZ=<Hz>u (bench boards lists the channels in use), or wait")
     return f"{exc} - another session works on it: use other boards, or wait"
+
+
+def _label(board) -> str:
+    """A board as Simon reads it: the Pi it sits on first, its Node ID after."""
+    where = board.sn if board.remote else (board.port or board.sn)
+    return f"{where} (Node ID {board.node_id})" if board.node_id is not None else where
+
+
+def _claim_channel(stack: ExitStack, repo: Path, leases: Leases, overrides: dict[str, str], found: list,
+                   mine: list, capture_dir: Path, share_air: bool) -> int:
+    """Take the channel this command's build is on (the lease), and judge the air around it: boards outside the
+    command that send Sync closer than the channel spacing. An idle one is said; one another session holds
+    stops the command (--share-air goes on, saying so). Returns the channel in Hz."""
+    from datetime import datetime, timezone
+
+    from bench.channels import (AirBusy, channel_of, free_channels, held_channels, hold_channel, judge_air,
+                                load_plan, mhz, observe_transmitters)
+
+    plan = load_plan(repo)
+    hz = channel_of(overrides, plan)
+    stack.enter_context(hold_channel(leases, hz, plan))
+    mine_sn = {b.sn for b in mine}
+    others = [b for b in found if b.sn not in mine_sn and b.node]
+    on_air = observe_transmitters(capture_dir, [b.node for b in others], datetime.now(timezone.utc))
+    holders = leases.holders([b.sn for b in others])
+    verdict = judge_air(hz, plan, on_air, {b.node: _label(b) for b in others}, {b.node for b in mine},
+                        {b.node: holders[b.sn] for b in others if b.sn in holders})
+    print(f"channel {mhz(hz)}")
+    for line in verdict.warn:
+        print(f"air: {line}")
+    if verdict.refuse:
+        in_use = [tx.freq_hz for tx in on_air.values()] + list(held_channels(leases, plan))
+        free = free_channels(plan, in_use)
+        hint = f"; a free channel: -D FREQ_DEFAULT_HZ={free[0]}u" if free else ""
+        if not share_air:
+            raise AirBusy("; ".join(verdict.refuse) + f" - this would put two runs on one channel{hint}, "
+                          "or pass --share-air to run anyway")
+        for line in verdict.refuse:
+            print(f"air (--share-air): {line}")
+    return hz
 
 
 def cmd_build(args: argparse.Namespace) -> int:
@@ -149,13 +194,43 @@ def _survey(args: argparse.Namespace):
     return repo, boards, prog.down, leases.holders([b.sn for b in boards]), elsewhere
 
 
+def _surroundings(args: argparse.Namespace, repo: Path, boards: list):
+    """What stands around the boards: (positions, who is on the air, channels in use, positions no board has).
+    The positions file is per machine and optional; a file with an error stops the command, naming it."""
+    from datetime import datetime, timezone
+
+    from bench.boards import format_uid, load_node_table
+    from bench.capture import CAPTURE_DIR
+    from bench.channels import held_channels, load_plan, observe_transmitters
+    from bench.positions import load_positions, unknown_boards
+
+    try:
+        positions = load_positions()
+    except ValueError as exc:
+        raise SystemExit(f"bench: {exc}") from exc
+    on_air = observe_transmitters(shared_root(repo) / CAPTURE_DIR, [b.node for b in boards if b.node],
+                                  datetime.now(timezone.utc))
+    channels = held_channels(_leases(repo, args), load_plan(repo))
+    known = {format_uid(uid) for uid in load_node_table(repo)}
+    return positions, on_air, channels, unknown_boards(positions, known)
+
+
 def _snapshot(args: argparse.Namespace):
     from datetime import datetime, timezone
 
     from bench.viz import snapshot
 
     repo, boards, down, held, elsewhere = _survey(args)
-    return snapshot(boards, down, held, worktree_name(repo), datetime.now(timezone.utc), elsewhere), repo
+    positions, on_air, channels, unknown = _surroundings(args, repo, boards)
+    return snapshot(boards, down, held, worktree_name(repo), datetime.now(timezone.utc), elsewhere,
+                    positions=positions, on_air=on_air, channels=channels, unknown_positions=unknown), repo
+
+
+def _place_note(place) -> str:
+    """The place of a board in the text listing: its name, else its coordinates; nothing when unknown."""
+    if place is None:
+        return ""
+    return f"  at {place.name or f'{place.lat:.5f}, {place.lon:.5f}'}"
 
 
 def cmd_boards(args: argparse.Namespace) -> int:
@@ -167,20 +242,30 @@ def cmd_boards(args: argparse.Namespace) -> int:
         snap, _ = _snapshot(args)
         print(json.dumps(snap, indent=2))
         return 0 if snap["boards"] else 1
-    _, boards, down, held, elsewhere = _survey(args)
+    from bench.channels import mhz
+
+    repo, boards, down, held, elsewhere = _survey(args)
     if not boards and not down:
         print("no ST-LINK probe connected")
         return 1
+    positions, on_air, channels, unknown = _surroundings(args, repo, boards)
     for b in boards:
         uid = f"{format_uid(b.uid)} ({b.uid_source})" if b.uid else "unknown (no BOOT in the capture)"
-        nid = b.node_id if b.node_id is not None else ("not in node_id.c" if b.uid else "?")
+        nid = b.node_id if b.node_id is not None else ("not in node_id.c: boots with id=0" if b.uid else "?")
         build = b.build or ("none (firmware without build= in BOOT)" if b.uid_source == "trace" else "?")
         where = urlsplit(b.port).netloc if b.remote else (b.port or "no COM port")
         print(f"{'pi-node' if b.remote else 'probe'} {b.sn}  {where}  Node ID {nid}  UID {uid}  last build {build}"
               + (f"  HELD by {held[b.sn]}" if b.sn in held else "")
-              + (f"  (recorded by {elsewhere[b.sn]}: may be in use)" if b.sn in elsewhere else ""))
+              + (f"  (recorded by {elsewhere[b.sn]}: may be in use)" if b.sn in elsewhere else "")
+              + _place_note(positions.place_of(format_uid(b.uid) if b.uid else None))
+              + (f"  on air {mhz(on_air[b.node].freq_hz)} (last Sync {on_air[b.node].last_tx:%H:%M} UTC)"
+                 if b.node in on_air else ""))
     for r in down:
         print(f"pi-node {r.name}  {r.host}:{r.log}  not answering")
+    for hz, who in sorted(channels.items()):
+        print(f"channel {mhz(hz)}  HELD by {who}")
+    for uid in unknown:
+        print(f"position for UID {uid}: no board has it (not in node_id.c)")
     known = sum(1 for b in boards if b.node_id is not None)
     print(f"{len(boards)} board(s) connected, {known} with a known Node ID"
           + (f", {len(held)} held by another session" if held else "")
@@ -288,9 +373,12 @@ def cmd_flash(args: argparse.Namespace) -> int:
     leases = _leases(repo, args)
     with ExitStack() as stack:     # the leases are held until the command ends
         try:
-            boards = select(discover(prog, ports, table, capture_dir, probe_unknown=_probe_arg(args),
-                                     may_probe=lambda sn: leases.try_exclusive(stack, sn)), assignments)
+            found = discover(prog, ports, table, capture_dir, probe_unknown=_probe_arg(args),
+                             may_probe=lambda sn: leases.try_exclusive(stack, sn))
+            boards = select(found, assignments)
             stack.enter_context(leases.hold(exclusive=[b.sn for b in boards.values()]))
+            _claim_channel(stack, repo, leases, dict(args.define or []), found, list(boards.values()), capture_dir,
+                           args.share_air)
             present = [ports[p.sn] for p in prog.probes() if p.sn in ports]
             capture = Capture(repo, data=shared_root(repo))
             _, done = capture.up(present, required=[b.port for b in boards.values() if b.port])
@@ -306,7 +394,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
             print(f"build {result.build_id} ok; log {result.log_path}")
             since, flashed = flash_nodes(prog, boards, table, result, assignments)
         except Held as exc:
-            print(f"bench flash: {_held_note(exc)}", file=sys.stderr)
+            print(f"bench flash: {_held_note(exc, repo)}", file=sys.stderr)
             return 1
         except (LookupError, RuntimeError, ValueError, Refused, ProgrammerError) as exc:
             print(f"bench flash: {exc}{_down_note(prog)}", file=sys.stderr)
@@ -380,6 +468,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     try:
         s, text = _scenario_from_args(args)
+        _scenario_channel(args, s)
     except ValueError as exc:
         print(f"bench run: {exc}", file=sys.stderr)
         return 3
@@ -399,6 +488,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             stack.enter_context(leases.hold(
                 exclusive=[boards[n].sn for n in boards if n in written],
                 shared=[boards[n].sn for n in boards if n not in written]))   # only watched: many may
+            _claim_channel(stack, repo, leases, s.overrides, found, list(boards.values()), capture_dir, args.share_air)
             present = [ports[p.sn] for p in prog.probes() if p.sn in ports]
             capture = Capture(repo, data=shared_root(repo))
             _, done = capture.up(present, required=[b.port for b in boards.values() if b.port])
@@ -424,7 +514,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             (out / "manifest.toml").write_text(dumps(manifest), encoding="utf-8")
             outcome = follow(s, boards, result.build_id, capture_dir, since, reset=prog.reset, flashed=flashed)
         except Held as exc:
-            print(f"bench run: {_held_note(exc)}", file=sys.stderr)
+            print(f"bench run: {_held_note(exc, repo)}", file=sys.stderr)
             return 1
         except (LookupError, RuntimeError, ValueError, Refused, ProgrammerError) as exc:
             print(f"bench run: {exc}{_down_note(prog)}", file=sys.stderr)
@@ -493,15 +583,26 @@ def cmd_note(args: argparse.Namespace) -> int:
     return 0
 
 
+def _scenario_channel(args: argparse.Namespace, s) -> int:
+    """The channel a scenario's Build Overrides put it on; ValueError when it is outside the channel plan."""
+    from bench.channels import channel_of, load_plan
+
+    repo = Path(args.repo) if getattr(args, "repo", None) else find_repo(Path.cwd())
+    return channel_of(s.overrides, load_plan(repo))
+
+
 def cmd_scenario(args: argparse.Namespace) -> int:
+    from bench.channels import mhz
     from bench.scenario import load, load_as, plan
 
     try:
         s = load_as(args.file, args.as_node)[0] if args.as_node is not None else load(args.file)
+        hz = _scenario_channel(args, s)
     except (OSError, ValueError) as exc:
         print(f"{args.file}: {exc}", file=sys.stderr)
         return 3
     print(plan(s))
+    print(f"channel: {mhz(hz)}")
     return 0
 
 
@@ -577,6 +678,8 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--probe-uids", action="store_true", help="read unknown UIDs over SWD (reboots those boards)")
     f.add_argument("--probe-uid", action="append", metavar="ID",
                    help="read this board's UID over SWD (probe serial number or Pi Node name)")
+    f.add_argument("--share-air", action="store_true",
+                   help="go on although a board another session holds sends Sync closer than 1 MHz to this channel")
     f.add_argument("--timeout", type=float, default=60, help="seconds to wait for the boot check")
     f.add_argument("--no-check", action="store_true", help="do not wait for the boot")
     f.set_defaults(func=cmd_flash)
@@ -599,6 +702,8 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--save", metavar="FILE", help="also save the scenario described by the options")
     rn.add_argument("--as", dest="as_node", type=int, metavar="ID",
                     help="run a template scenario (its board under test is node 0) on this Node ID")
+    rn.add_argument("--share-air", action="store_true",
+                    help="go on although a board another session holds sends Sync closer than 1 MHz to this channel")
     rn.add_argument("--probe-uids", action="store_true", help="read unknown UIDs over SWD (reboots those boards)")
     rn.add_argument("--probe-uid", action="append", metavar="ID",
                     help="read this board's UID over SWD (probe serial number or Pi Node name)")

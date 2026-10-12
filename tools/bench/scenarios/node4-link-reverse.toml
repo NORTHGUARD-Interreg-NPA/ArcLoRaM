@@ -1,0 +1,42 @@
+# Purpose: spontaneous. Test Record docs/test-tracker/spot-20261012-node4-link.md.
+# Claim (a diagnostic of node4-link.toml): the other direction. nuna-node-04 (remote site) is the C3 and a
+# C2 on the default site listens for it, on the same channel, 867.3 MHz (channel_plan.h), so the desk
+# experiments and other sessions on 868.3 MHz do not hear it. When node4-link.toml hears nothing, this
+# tells a dead path (nothing heard here either) from a receiver that does not work (heard here only).
+# A template like node4-link.toml: node 0 is the C2 on the default site, aimed with `--as <Node ID>`.
+# The C3 is flashed first, so its boot burst (cells 0 to 4, 20 s apart) falls while the C2 boots.
+description = "A C2 on the default site receives the Sync of nuna-node-04 (remote site)"
+timeout = "24m"
+
+[nodes]
+4 = "C3"
+0 = "C2"
+
+[overrides]
+SYNC_BOOT_BURST = "5u"
+FREQ_DEFAULT_HZ = "867300000u"
+
+[[expect]]
+node = 4
+event = "SYNC_TX"
+where = { freq = 867300000 }
+within = "2m"
+
+[[expect]]
+node = 0
+event = "RX_DONE"
+within = "3m"
+
+[[expect]]
+node = 0
+event = "RX_DONE"
+count = 10
+within = "21m"
+
+[[forbid]]
+event = "TX_DENIED"
+
+[[forbid]]
+node = 4
+event = "SYNC_TX"
+where = { freq = 868300000 }

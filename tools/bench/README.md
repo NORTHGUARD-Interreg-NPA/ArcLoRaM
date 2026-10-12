@@ -401,6 +401,49 @@ A board has one writer at a time:
 - A lease is released by the system when its command ends, however it ends, so there is nothing to clean up.
 - A capture that another worktree started and that holds only other boards is left alone; `bench capture up --replace` takes ports from it and is for a board this command needs.
 
+## Radio channels
+
+A board lease keeps two sessions off one board; it says nothing about the air.
+Two runs on disjoint boards still hear each other on one channel, a C2 locks to whichever C3 it hears first, and an idle board keeps sending the Sync of its last image.
+So a run has a channel of its own (issue #85).
+
+- **The plan** is in the firmware, `Common/Protocol/channel_plan.h`, and bench reads it from there: channels on a 100 kHz raster from 865.1 to 868.5 MHz (the 1 % / 25 mW sub-bands the Compliance Engine knows), 868.3 MHz by default, and two sessions **1 MHz apart** at least (the Semtech SX1261/2 summary gives 88 dB of blocking immunity at 1 MHz; no figure was found for a closer offset).
+  Four channels fit: 865.3, 866.3, 867.3 and 868.3 MHz.
+- **A run moves to another channel** with the Build Override `FREQ_DEFAULT_HZ` (`[overrides] FREQ_DEFAULT_HZ = "867300000u"` or `-D FREQ_DEFAULT_HZ=867300000u`).
+  Every phase takes it (the discovery channel and the fallback too), all boards of the run get it, and the Build ID carries it.
+  A value outside the plan is refused before the build (`bench scenario check` exits 3), and so is a firmware build with one (`#error`).
+  The name is not about Sync: today every phase uses the one channel; when phases get channels of their own, this stays the default of those that do not.
+- **The channel is leased** like a board (ADR-0003): exclusive on its own slot, shared on every plan slot closer than 1 MHz.
+  `bench run` and `bench flash` hold it until they end; a second session on the same channel, or closer than 1 MHz, is refused at once and told who holds what.
+- **The air is read from the capture.** A board's last `SYNC_TX` says which channel it is on, so a session on older code (it takes no channel lease) and an idle board (it keeps sending its last image) are seen too.
+  A board outside the command that sent Sync within 20 minutes on a channel closer than 1 MHz is said (`air: ...`); one that another session holds stops the command, with a free channel to take, unless `--share-air` is given.
+  An idle board cannot be silenced from here: it is only said.
+- `bench boards` shows each board's channel (`on air 867.3 MHz (last Sync 16:23 UTC)`) and the channels a session holds; `bench map` shows the same.
+
+## Positions
+
+Where a board stands belongs to the board, not to its Node ID, its port or its Pi: it is kept per chip UID in `~/.config/bench/positions.toml` (`$BENCH_POSITIONS`).
+The file is per machine and optional, like `bench.toml`: the repo is public and a site's coordinates are not for it.
+`bench` reads it, validates it (coordinates in range, 24-hex-digit UIDs, no UID twice, no unknown key) and refuses a bad file by name.
+
+```toml
+[default]                       # where a board with no entry of its own stands
+place = "Main site"             # optional name
+lat = 55.0                      # degrees north
+lon = 12.0                      # degrees east
+
+[[board]]
+uid = "003400443232501420383543"
+place = "East end"              # optional
+lat = 55.0
+lon = 12.01
+alt = 20.5                      # optional, metres above sea level
+```
+
+From the places come the distance of every link between boards that stand in different places and the loss a link should have (free space by default, a log-distance exponent otherwise; 14 dBm as configured in the firmware, no antenna gain assumed, SF12 / BW125 / 868.3 MHz): the expected RSSI and SNR are the ceiling to read the measured ones against.
+`bench boards` and `bench map` show each board's place and the expected links; a position whose UID is not in `node_id.c` is named (a typo, or a board never onboarded), and so is a board with a UID that is not in `node_id.c` (it boots with `id=0`).
+With no positions file, they say nothing about places.
+
 ## Remote boards (Pi Nodes)
 
 A board wired to a Raspberry Pi (`github.com/Nuna-Systems/Pi-node`: OpenOCD for SWD over the Pi's GPIO header, the UART as a TCP log server, both on the tailnet) is a Board like any other.

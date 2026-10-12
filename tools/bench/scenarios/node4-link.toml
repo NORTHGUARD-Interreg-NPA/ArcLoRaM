@@ -1,0 +1,50 @@
+# Purpose: spontaneous. Test Record docs/test-tracker/spot-20261012-node4-link.md.
+# Claim: Node 4, on the remote site, receives the Sync packets of a C3 on the default site, and the
+# record gives the RSSI and SNR of every packet it hears (the margin is read from the report).
+# A template (like onboard.toml): node 0 is the C3 on the default site, aimed at a free board there with
+# `--as <Node ID>` (nuna-node-06 is Node ID 1, nuna-node-08 is 6, nuna-node-09 is 7); node 4 is the C2
+# (nuna-node-04, remote site). SF12 / BW125, NUCLEO Clock.
+# On its own channel, 867.3 MHz (channel_plan.h): the desk experiments and other sessions stay on the
+# default 868.3 MHz, 1 MHz away, so neither hears the other and a C2 cannot lock to a foreign C3.
+# The default DEV profile (one packet per 200 s, 0.5 % of the band) with the boot burst: the C3 sends
+# cells 0 to 4 of its first phase 20 s apart (the C2 may miss the first cells, flashed before or after
+# the C3), then one packet per phase, so about 10 packets in 21 min, spread over time. The air stays as light as the idle C3s
+# already on it (the BRINGUP profile would put 9.9 % duty cycle on a channel other sessions use).
+# The count is the sample size, not a pass mark: a TIMEOUT with fewer packets is a measurement too
+# (a weak link), and a TIMEOUT with none is the answer "Node 4 does not hear it".
+description = "Node 4 (remote site) receives the Sync of a C3 on the default site"
+timeout = "24m"
+
+[nodes]
+0 = "C3"
+4 = "C2"
+
+[overrides]
+SYNC_BOOT_BURST = "5u"
+FREQ_DEFAULT_HZ = "867300000u"
+
+[[expect]]
+node = 0
+event = "SYNC_TX"
+where = { freq = 867300000 }
+within = "2m"
+
+[[expect]]
+node = 4
+event = "RX_DONE"
+within = "3m"
+
+[[expect]]
+node = 4
+event = "RX_DONE"
+count = 10
+within = "21m"
+
+[[forbid]]
+event = "TX_DENIED"
+
+# No Sync on the default channel from either board of the run: the override reached the radio.
+[[forbid]]
+node = 0
+event = "SYNC_TX"
+where = { freq = 868300000 }

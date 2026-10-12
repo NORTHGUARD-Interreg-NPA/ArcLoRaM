@@ -35,6 +35,9 @@ class Held(Exception):
 
 
 class Leases:
+    #: What a refusal says of a holder that left no description: a watcher, or a session that just took the file.
+    UNKNOWN_HOLDER = "another session (watching it, or just taking it)"
+
     def __init__(self, directory: Path | str, worktree: str, command: str) -> None:
         self.dir = Path(directory)
         self.worktree = worktree
@@ -52,7 +55,7 @@ class Leases:
             return (f"{info['worktree']}: {info['command']} (pid {info['pid']}, since "
                     f"{datetime.fromisoformat(info['since']):%H:%M:%S} UTC)")
         except (OSError, ValueError, KeyError):
-            return "another session (watching it, or just taking it)"
+            return self.UNKNOWN_HOLDER
 
     def _lock(self, fd: int, mode: int) -> bool:
         # A reader probing the board holds the lock for a moment: ask a few times before refusing.
@@ -107,6 +110,11 @@ class Leases:
         except Held:
             return False
         return True
+
+    def exclusive_holders(self, boards: Iterable[str]) -> dict[str, str]:
+        """Like `holders`, but only those held exclusively (they leave a description): a board that is
+        merely watched, or a channel slot held as another channel's guard, is not listed."""
+        return {board: who for board, who in self.holders(boards).items() if who != self.UNKNOWN_HOLDER}
 
     def holders(self, boards: Iterable[str]) -> dict[str, str]:
         """Which of these boards another session holds now, and who: looking takes nothing."""
