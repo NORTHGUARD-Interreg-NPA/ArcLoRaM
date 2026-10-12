@@ -316,3 +316,35 @@ add_unity_test(test_node_id
     test_node_id.c
     ../../Common/Protocol/node_id.c
 )
+
+# The channel plan (channel_plan.h): the default, and an override that moves every phase's channel.
+set(TEST_SYNC_PROFILE "")
+add_unity_test(test_channel_plan_default
+    test_channel_plan.c
+    ../../CM0PLUS/SubGHz_Phy/Logic/freq_resolver.c
+    ../../Common/SharedMemory/shared_mem.c
+)
+target_compile_definitions(test_channel_plan_default PRIVATE EXPECTED_FREQ_HZ=868300000u)
+add_unity_test(test_channel_plan_override
+    test_channel_plan.c
+    ../../CM0PLUS/SubGHz_Phy/Logic/freq_resolver.c
+    ../../Common/SharedMemory/shared_mem.c
+)
+target_compile_definitions(test_channel_plan_override PRIVATE
+    FREQ_DEFAULT_HZ=867300000u EXPECTED_FREQ_HZ=867300000u)
+
+# A channel outside the plan must not build: below the band, above it, off the 100 kHz raster, in the
+# 0.1 % sub-band, in the 10 % one. Each is a target that has to FAIL to compile (WILL_FAIL).
+foreach(bad 865000000u 868600000u 868350000u 868800000u 869525000u 0u)
+    set(name test_channel_plan_refuses_${bad})
+    add_executable(${name} EXCLUDE_FROM_ALL test_channel_plan.c)
+    target_compile_definitions(${name} PRIVATE FREQ_DEFAULT_HZ=${bad} EXPECTED_FREQ_HZ=${bad})
+    target_include_directories(${name} PRIVATE
+        ${CMAKE_SOURCE_DIR}/../CM0PLUS/SubGHz_Phy/Logic
+        ${CMAKE_SOURCE_DIR}/../Common/SharedMemory
+        ${CMAKE_SOURCE_DIR}/../Common/Protocol)
+    target_link_libraries(${name} PRIVATE unity hal_stubs)
+    add_test(NAME ${name}
+        COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target ${name})
+    set_tests_properties(${name} PROPERTIES WILL_FAIL TRUE)
+endforeach()

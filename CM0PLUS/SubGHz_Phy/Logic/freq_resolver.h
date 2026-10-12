@@ -23,18 +23,20 @@
 #include <stdint.h>
 #include "protocol_types.h"
 #include "shared_mem.h"
+#include "channel_plan.h"   /* FREQ_DEFAULT_HZ: the channel of every phase */
 
 #ifndef FREQ_FALLBACK_HZ
 /*!
  * Safe fallback frequency returned when a \ref CELL_FREQ_STATIC phase has not
  * yet been populated by CM4.
  *
- * \remark Matches the 868.3 MHz Sync-phase default written by CM4 at boot.
+ * \remark The default channel CM4 writes into every phase at boot
+ *         (\ref FREQ_DEFAULT_HZ, 868.3 MHz unless a Build Override moves it).
  *         The TDMA Machine must never call \c Radio.SetChannel(0); this
  *         constant ensures a valid channel is used even before the first CM4
  *         write completes.
  */
-#define FREQ_FALLBACK_HZ  868300000u
+#define FREQ_FALLBACK_HZ  FREQ_DEFAULT_HZ
 #endif
 
 #ifndef SCAN_FREQ_HZ
@@ -43,9 +45,10 @@
  * before the FrameCursor (and so any per-cell frequency) is known.
  *
  * \remark Must match the frequency the SyncAnchor transmits Sync packets
- *         on: the 868.3 MHz Sync-phase default written by CM4 at boot.
+ *         on: the default channel CM4 writes into every phase at boot
+ *         (\ref FREQ_DEFAULT_HZ).
  */
-#define SCAN_FREQ_HZ  868300000u
+#define SCAN_FREQ_HZ  FREQ_DEFAULT_HZ
 #endif
 
 /*!

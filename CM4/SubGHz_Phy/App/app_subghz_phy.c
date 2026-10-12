@@ -31,6 +31,7 @@
 #include "stm32_seq.h"
 #include "shared_mem.h"
 #include "cm4_diag.h"
+#include "channel_plan.h"
 
 /* USER CODE END Includes */
 
@@ -87,10 +88,10 @@ void MX_SubGHz_Phy_Init(void)
   CM4Diag_Init();
 
   for (int i = 0; i < (int)FREQ_MAX_PHASES; i++) {
-      g_freq_resolver_state.phases[i].header_freq_hz    = 868300000u;
-      g_freq_resolver_state.phases[i].footer_freq_hz    = 868300000u;
+      g_freq_resolver_state.phases[i].header_freq_hz    = FREQ_DEFAULT_HZ;
+      g_freq_resolver_state.phases[i].footer_freq_hz    = FREQ_DEFAULT_HZ;
       g_freq_resolver_state.phases[i].cell_mode         = CELL_FREQ_STATIC;
-      g_freq_resolver_state.phases[i].cell_freq_or_seed = 868300000u;
+      g_freq_resolver_state.phases[i].cell_freq_or_seed = FREQ_DEFAULT_HZ;
       g_freq_resolver_state.phases[i].override_table_idx = 0xFFu;
   }
 
