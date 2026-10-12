@@ -45,6 +45,7 @@ Three things, each with one job:
 - The **scenario** is the executable: one claim per scenario. Its first comment lines name the purpose, the issue and the Test Record.
 
 File names pair by slug: record `<issue>-<slug>.md`, scenario `<slug>.toml` (several: `<slug>-<variant>.toml`).
+`bench records check` reports where the three disagree, offline, and `--online` also against the issue on GitHub (`tools/bench/README.md`, Checking the Test Records).
 A record's state is read, not declared: no Runs row means planned; Runs but unticked criteria means in progress; every criterion ticked, each with a PASS run in Runs, means done.
 
 ## Workflow
