@@ -20,9 +20,12 @@
 #if defined(HOST_TEST)
 
 #  define CORE_CP(id)          ((void)0)
+#  define CORE_CP_ISR(id)      ((void)0)
 #  define CORE_BEAT()          ((void)0)
 #  define CORE_KEPT()          ((void)0)
 #  define CORE_PROMISE(ms)     ((void)0)
+#  define CORE_LOOK(now_ms)    ((void)0)
+#  define CORE_LOOK_RESYNC()   ((void)0)
 #  define CORE_CP_LOG_IN()     ((void)0)
 #  define CORE_CP_LOG_OUT()    ((void)0)
 
@@ -32,6 +35,7 @@
 #  include "core_state.h"
 #  include "core_fault.h"
 #  include "shared_mem.h"
+#  include "core_state_glue.h"
 
 #  if defined(CORE_CM0PLUS)
 #    define CORE_STATE_SELF      g_core_state_cm0
@@ -52,8 +56,25 @@
         CoreFault_BenchAt((uint8_t)(id));                                     \
     } while (0)
 
+/*! A checkpoint passed in an interrupt (SysTick, the radio): kept apart from the thread's. */
+#  define CORE_CP_ISR(id)                                                     \
+    do {                                                                      \
+        CoreState_CheckpointIsr(&CORE_STATE_SELF, (uint8_t)(id));             \
+        CoreFault_BenchAt((uint8_t)(id));                                     \
+    } while (0)
+
 /*! The core served a wake it had promised (its slot task runs): the survivor judges the promise by this. */
 #  define CORE_KEPT()          CoreState_Kept(&CORE_STATE_SELF)
+
+/*! The CM0+ looks at the CM4 (its slot task and radio interrupt call this with the time of day in ms they
+ *  already have); the CM4 has its own timer for the CM0+. After an RTC set the time of day jumps: resync. */
+#  if defined(CORE_CM0PLUS)
+#    define CORE_LOOK(now_ms)    CoreWatchOther_Look((now_ms))
+#    define CORE_LOOK_RESYNC()   CoreWatchOther_Resync()
+#  else
+#    define CORE_LOOK(now_ms)    ((void)0)
+#    define CORE_LOOK_RESYNC()   ((void)0)
+#  endif
 
 /*! The core will wake within \c ms of now (an alarm is programmed), or promises nothing (CORE_STATE_NO_PROMISE). */
 #  define CORE_PROMISE(ms)     CoreState_Promise(&CORE_STATE_SELF, (ms))

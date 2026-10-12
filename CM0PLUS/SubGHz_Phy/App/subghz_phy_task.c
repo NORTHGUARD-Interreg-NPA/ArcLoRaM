@@ -108,11 +108,12 @@ static uint32_t plat_rx_back_ticks(uint8_t len, uint32_t *toa_ms);
 
 void SubGhzPhyTask_OnRadioIrq(void)
 {
-    CORE_CP(CP_CM0_IRQ_RADIO);
+    CORE_CP_ISR(CP_CM0_IRQ_RADIO);
     /* One RTC read in ticks; the ms of the log and the diagnostics are its
      * floor (the same value GetTimerTicks gives). */
     uint32_t ticks = TIMER_IF_GetDayTicks(false);
     uint32_t stamp = RtcTicks_ToMs(ticks);
+    CORE_LOOK(stamp);
     uint16_t irq   = SUBGRF_GetIrqStatus();
 
     /* Keep the latest detection: a false preamble detection on noise earlier
@@ -602,6 +603,7 @@ static void mac_hook_rtc_set(uint32_t target_ms,
     /* The monotonic counter (UTIL_TIMER, HAL_GetTick) must not count this
      * jump: bracket the write. Begin also says whether a shift is pending. */
     bool shift_free = TIMER_IF_RtcWriteBegin();
+    CORE_LOOK_RESYNC();   /* the time of day jumps: the look at the CM4 takes a new baseline */
 
     uint32_t now_ticks = TIMER_IF_GetDayTicks(false);
     uint32_t anchor    = s_anchor_ticks;
@@ -818,6 +820,7 @@ void SubGhzPhyTask_Init(void)
            CoreFault_ResetName(), (unsigned)CoreFault_ResetFlags());
     CoreFault_ReportAtBoot();
     CoreStateBoot_Report();
+    CoreSeenBoot_Report();
 #ifdef BENCH_PROBE
     core_state_cost_probe();
 #endif

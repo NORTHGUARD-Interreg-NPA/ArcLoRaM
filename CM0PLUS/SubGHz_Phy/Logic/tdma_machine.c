@@ -472,6 +472,7 @@ void TdmaMachine_SlotTask(void)
     /* ---- Step 1: read RTC ---- */
     s_bootstrapped_in_slot = false;
     now_ms = s_platform.GetRtcMs();
+    CORE_LOOK(now_ms);
 
     /* ---- Step 2: cursor integrity checkpoint ---- */
     {

@@ -70,6 +70,28 @@ void test_exactly_the_trace_and_sleep_checkpoints_are_plumbing(void)
     }
 }
 
+void test_an_interrupt_checkpoint_does_not_erase_where_the_thread_is_stuck(void)
+{
+    /* The CM4 stuck in its main loop is interrupted by SysTick a thousand times a second: that
+     * must not overwrite the checkpoint of the thread. */
+    CoreState_t s;
+    CoreState_Init(&s);
+    CoreState_Checkpoint(&s, CP_CM4_LOOP);
+    for (int i = 0; i < 1000; i++) CoreState_CheckpointIsr(&s, CP_CM4_SYSTICK);
+    TEST_ASSERT_EQUAL_UINT8(CP_CM4_LOOP, s.cp);
+    TEST_ASSERT_EQUAL_UINT8(CP_CM4_LOOP, s.step);
+    TEST_ASSERT_EQUAL_UINT8(CP_CM4_SYSTICK, s.isr);
+    TEST_ASSERT_EQUAL_UINT32(1001, s.seq);
+}
+
+void test_a_fresh_state_has_no_interrupt_checkpoint(void)
+{
+    CoreState_t s;
+    memset(&s, 0xA5, sizeof s);
+    CoreState_Init(&s);
+    TEST_ASSERT_EQUAL_UINT8(0, s.isr);
+}
+
 void test_a_core_stuck_in_a_trace_call_shows_both(void)
 {
     CoreState_t s;
@@ -329,6 +351,90 @@ void test_names_of_the_verdicts(void)
     TEST_ASSERT_EQUAL_STRING("?",       CoreWatch_StatusName((CoreWatchStatus_t)99));
 }
 
+/* ---- what the survivor saw, kept for the next boot ------------------------------ */
+
+static CoreVerdict_t overdue_verdict(CoreState_t *s)
+{
+    CoreWatch_t w;
+    CoreWatch_Init(&w);
+    CoreState_Init(s);
+    CoreState_Promise(s, 30000u);
+    CoreState_Beat(s);
+    CoreState_Kept(s);
+    CoreState_Checkpoint(s, CP_CM4_LOOP);
+    CoreState_Checkpoint(s, CP_CM4_LOG_IN);
+    CoreState_CheckpointIsr(s, CP_CM4_SYSTICK);
+    step(&w, s, 30000u);
+    return step(&w, s, 40000u);
+}
+
+void test_a_seen_record_keeps_what_the_survivor_saw_of_an_overdue_core(void)
+{
+    CoreState_t s; CoreSeen_t seen;
+    CoreVerdict_t v = overdue_verdict(&s);
+    TEST_ASSERT_EQUAL(CORE_WATCH_OVERDUE, v.status);
+    CoreSeen_Make(&seen, &s, &v, true);
+    TEST_ASSERT_TRUE(CoreSeen_IsOverdue(&seen));
+    TEST_ASSERT_EQUAL_UINT8(CP_CM4_LOG_IN, seen.cp);
+    TEST_ASSERT_EQUAL_UINT8(CP_CM4_LOOP, seen.step);
+    TEST_ASSERT_EQUAL_UINT8(CP_CM4_SYSTICK, seen.isr);
+    TEST_ASSERT_EQUAL_UINT32(1, seen.hb);
+    TEST_ASSERT_EQUAL_UINT32(1, seen.kept);
+    TEST_ASSERT_EQUAL_UINT32(3, seen.seq);
+    TEST_ASSERT_EQUAL_UINT32(40000u, seen.silent_ms);
+    TEST_ASSERT_EQUAL_UINT32(10000u, seen.over_ms);
+    TEST_ASSERT_EQUAL_UINT32(30000u, seen.due_ms);
+    TEST_ASSERT_EQUAL_UINT8(0, seen.alive);
+    TEST_ASSERT_EQUAL_UINT8(1, seen.crash);
+}
+
+void test_a_core_that_is_fine_leaves_no_seen_record(void)
+{
+    CoreState_t s; CoreSeen_t seen; CoreWatch_t w;
+    CoreState_Init(&s); CoreWatch_Init(&w);
+    serve(&s, 30000u);
+    CoreVerdict_t v = step(&w, &s, 30000u);
+    CoreSeen_Make(&seen, &s, &v, false);
+    TEST_ASSERT_FALSE(CoreSeen_IsOverdue(&seen));
+}
+
+void test_a_core_that_recovers_clears_the_record_the_survivor_made(void)
+{
+    CoreState_t s; CoreSeen_t seen; CoreWatch_t w;
+    CoreVerdict_t v = overdue_verdict(&s);
+    CoreSeen_Make(&seen, &s, &v, false);
+    TEST_ASSERT_TRUE(CoreSeen_IsOverdue(&seen));
+    CoreWatch_Init(&w);
+    step(&w, &s, 30000u);
+    CoreState_Kept(&s);                       /* it served a promised wake after all */
+    v = step(&w, &s, 30000u);
+    CoreSeen_Make(&seen, &s, &v, false);
+    TEST_ASSERT_FALSE(CoreSeen_IsOverdue(&seen));
+}
+
+void test_ram_that_was_never_written_is_not_a_seen_record(void)
+{
+    CoreSeen_t seen;
+    memset(&seen, 0, sizeof seen);
+    TEST_ASSERT_FALSE(CoreSeen_IsOverdue(&seen));
+    memset(&seen, 0xA5, sizeof seen);
+    TEST_ASSERT_FALSE(CoreSeen_IsOverdue(&seen));
+}
+
+void test_a_seen_record_is_cleared_once_reported(void)
+{
+    CoreState_t s; CoreSeen_t seen;
+    CoreVerdict_t v = overdue_verdict(&s);
+    CoreSeen_Make(&seen, &s, &v, false);
+    CoreSeen_Clear(&seen);
+    TEST_ASSERT_FALSE(CoreSeen_IsOverdue(&seen));
+}
+
+void test_the_seen_record_has_a_fixed_size(void)
+{
+    TEST_ASSERT_EQUAL_UINT32(36u, sizeof(CoreSeen_t));
+}
+
 int main(void)
 {
     UNITY_BEGIN();
@@ -337,6 +443,8 @@ int main(void)
     RUN_TEST(test_a_checkpoint_keeps_the_last_id_and_counts);
     RUN_TEST(test_a_trace_call_or_a_sleep_does_not_hide_where_the_flow_was);
     RUN_TEST(test_exactly_the_trace_and_sleep_checkpoints_are_plumbing);
+    RUN_TEST(test_an_interrupt_checkpoint_does_not_erase_where_the_thread_is_stuck);
+    RUN_TEST(test_a_fresh_state_has_no_interrupt_checkpoint);
     RUN_TEST(test_a_core_stuck_in_a_trace_call_shows_both);
     RUN_TEST(test_a_beat_counts_wakes);
     RUN_TEST(test_a_kept_promise_counts_apart_from_the_wakes);
@@ -359,5 +467,11 @@ int main(void)
     RUN_TEST(test_a_state_that_is_not_valid_is_not_judged);
     RUN_TEST(test_the_silence_saturates_instead_of_wrapping);
     RUN_TEST(test_names_of_the_verdicts);
+    RUN_TEST(test_a_seen_record_keeps_what_the_survivor_saw_of_an_overdue_core);
+    RUN_TEST(test_a_core_that_is_fine_leaves_no_seen_record);
+    RUN_TEST(test_a_core_that_recovers_clears_the_record_the_survivor_made);
+    RUN_TEST(test_ram_that_was_never_written_is_not_a_seen_record);
+    RUN_TEST(test_a_seen_record_is_cleared_once_reported);
+    RUN_TEST(test_the_seen_record_has_a_fixed_size);
     return UNITY_END();
 }

@@ -189,7 +189,7 @@ void PendSV_Handler(void)
 void SysTick_Handler(void)
 {
   /* USER CODE BEGIN SysTick_IRQn 0 */
-  CORE_CP(CP_CM4_SYSTICK);
+  CORE_CP_ISR(CP_CM4_SYSTICK);
   /* USER CODE END SysTick_IRQn 0 */
   HAL_IncTick();
   /* USER CODE BEGIN SysTick_IRQn 1 */

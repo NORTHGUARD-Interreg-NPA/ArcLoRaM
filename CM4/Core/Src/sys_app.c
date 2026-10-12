@@ -221,6 +221,7 @@ UTIL_ADV_TRACE_SetVerboseLevel(VLEVEL_H); //has to be set after MBMUXIF_TraceIni
          CoreFault_ResetName(), (unsigned)CoreFault_ResetFlags());
   CoreFault_ReportAtBoot();
   CoreStateBoot_Report();
+  CoreSeenBoot_Report();
 
   init_status = MBMUXIF_SystemInit();
   if (init_status < 0)

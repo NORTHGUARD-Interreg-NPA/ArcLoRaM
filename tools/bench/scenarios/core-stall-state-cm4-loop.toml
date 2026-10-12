@@ -22,7 +22,7 @@ at = "+4m"
 [[expect]]
 node = 6
 event = "CORE_STATE"
-where = { core = "cm4", st = "boot", cp = "systick" }
+where = { core = "cm4", st = "boot", isr = "systick" }
 within = "6m"
 
 [[forbid]]

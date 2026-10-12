@@ -44,14 +44,16 @@ EVENTS: dict[str, Event] = {
     ),
     "CORE_STATE": Event(
         "S",
-        ("core", "st", "cp", "step", "hb", "kept", "seq", "due"),
+        ("core", "st", "cp", "step", "isr", "hb", "kept", "seq", "due"),
         "Liveness of a core (#101, Common/Log/core_state.h). st=boot: the state the previous run of this core left, printed "
-        "after its BOOT (cp = the last checkpoint, step = the last one that is not a trace call or a sleep, hb = wakes, "
+        "after its BOOT (cp = the last checkpoint, step = the last one that is not a trace call or a sleep, isr = the last one passed in an interrupt, hb = wakes, "
         "kept = promised wakes served, seq = checkpoints, due = the wake it promised in ms, -1 for none). st=overdue: "
         "printed by the CM4 about the CM0+ when it has served no promised wake for longer than the wake it promised plus a "
         "margin (silent = the CM4's measure of that time in ms, over = silent minus due, alive = 1 when the heartbeat still "
-        "moves: a live core that lost a wake, 0 for a core that stopped).",
-        ("silent", "over", "alive"),
+        "moves: a live core that lost a wake, 0 for a core that stopped, by = the core that looked, crash = a crash record of "
+        "the core was valid). The same line is printed at the next BOOT of the core that was seen overdue, from the verdict the "
+        "other one left in RAM: the report of a CM4 that cannot print, made by a CM0+ that was alive.",
+        ("silent", "over", "alive", "by", "crash"),
     ),
     "CORE_CRASH_SCB": Event(
         "S",

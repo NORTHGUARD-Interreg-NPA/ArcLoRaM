@@ -1378,7 +1378,7 @@ This is acceptable for multi-year field deployments where a few-hour detection
 window is tolerable.
 
 Until issue #101 nothing incremented the counter (`g_cm4_heartbeat` was only declared and zeroed): it read 0 on the CM4 that locked up in silence event 4, which therefore said nothing about that CM4. The CM4 now increments it at every pass of its main loop, next to the heartbeat of its Core State.
-The CM0+ does not yet check it, and does not reset the CM4: that is #100 "Cross-core liveness: each core checks the other and restarts a stalled one".
+The CM0+ does not check that counter and does not reset the CM4: it looks at the CM4's Core State (see below), and the restart is #100 "Cross-core liveness: each core checks the other and restarts a stalled one".
 
 The hardware IWDG is **not used in production**. LSI is not enabled. Rationale:
 IWDG maximum timeout (~32 s) is incompatible with hour-long inter-Phase sleep
@@ -1440,11 +1440,13 @@ A lockup (a fault while a fault is being taken, as in silence events 3 and 4) ta
 _Avoid_: core dump, post-mortem (the post-mortem is the reading of a halted core from outside, #67)
 
 ### Core State
-The liveness record each core keeps in the shared region (`g_core_state_cm0`, `g_core_state_cm4`; `Common/Log/core_state.h`, issue #101): a heartbeat (`hb`, +1 at every pass of its main loop), the promised wakes it served (`kept`), the last checkpoint it passed (`cp`) and the last one that is not plumbing (`step`: a trace call and a Stop2 entry or exit are plumbing), and the wake it promised when it last programmed its alarm (`wake_in_ms`, a duration, or none).
+The liveness record each core keeps in the shared region (`g_core_state_cm0`, `g_core_state_cm4`; `Common/Log/core_state.h`, issue #101): a heartbeat (`hb`, +1 at every pass of its main loop), the promised wakes it served (`kept`), the last checkpoint it passed (`cp`), the last one that is not plumbing (`step`: a trace call and a Stop2 entry or exit are plumbing) and the last one passed in an interrupt (`isr`, apart because a stuck thread is interrupted a thousand times a second), and the wake it promised when it last programmed its alarm (`wake_in_ms`, a duration, or none).
 A checkpoint is one byte, named per core (`slot_in`, `mac_done`, `rx_set`, `rx_armed`, `alarm_set`, `irq`, `stop_in`, `loop`, `systick`...), and costs a few stores.
 The heartbeat says the core lives; the promise is judged by `kept`, because a NUCLEO wakes for its LED timer and keeps beating after the Alarm A chain has died.
 The CM4 looks at the CM0+ every 30 s from a timer of its own and prints `CORE_STATE st=overdue` when no promised wake was served for longer than the promise plus 5 s, with the checkpoint, how overdue, and `alive=1` for a live core that lost a wake or `alive=0` for one that stopped.
 A core that promised nothing (Scanning Rx has no alarm chain) is never overdue.
+The CM0+ looks at the CM4 the same way, with no timer of its own, at its slot tasks and radio interrupts; the CM4 promises a wake every 30 s, its own look at the CM0+.
+What a live core saw of the other (`g_core_seen_cm0`, `g_core_seen_cm4`) stays in RAM through a reset and is printed at the next `BOOT` as `CORE_STATE st=overdue by=<the core that looked>`, with `crash=1` when the other had left a crash record: the report of a CM4 that stopped and cannot print.
 Each core also prints the state its previous run left, `CORE_STATE st=boot`, after its `BOOT`: the only evidence of a CM4 that stopped, since the CM0+ prints through it.
 It cannot tell a lost wake from an ordinary sleep; only the silence the survivor measured can.
 _Avoid_: watchdog (it resets nothing), health check

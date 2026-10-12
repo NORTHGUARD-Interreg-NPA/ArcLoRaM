@@ -21,7 +21,10 @@
  *                core), and \c step, the last one that is not plumbing (a trace
  *                call, a Stop2 entry or exit): where the code's own flow last
  *                was, which a trace call or a sleep after it would hide;
- *                \c seq counts them;
+ *                \c isr, the last checkpoint passed in an interrupt (SysTick, the
+ *                radio), kept apart because a thread stuck in its main loop is
+ *                interrupted a thousand times a second and those would erase
+ *                where it is stuck; \c seq counts them all;
  *              - \c wake_in_ms, the wake it promised when it last programmed
  *                its alarm, as a duration (the two cores share no time base
  *                that survives an RTC set); \ref CORE_STATE_NO_PROMISE when
@@ -83,7 +86,8 @@ typedef struct {
     uint32_t wake_in_ms;   /*!< the wake promised at the last alarm, a duration; CORE_STATE_NO_PROMISE */
     uint8_t  cp;           /*!< last checkpoint */
     uint8_t  step;         /*!< last checkpoint that is not plumbing: a trace call or a Stop2 entry or exit */
-    uint8_t  pad[2];
+    uint8_t  isr;          /*!< last checkpoint passed in an interrupt, apart from the thread's cp and step */
+    uint8_t  pad;
 } CoreState_t;
 
 _Static_assert(sizeof(CoreState_t) == 24u, "CoreState_t is at a fixed place in the shared region");
@@ -97,8 +101,8 @@ static inline void CoreState_Init(CoreState_t *s)
     s->wake_in_ms = CORE_STATE_NO_PROMISE;
     s->cp         = 0u;
     s->step       = 0u;
-    s->pad[0]     = 0u;
-    s->pad[1]     = 0u;
+    s->isr        = 0u;
+    s->pad        = 0u;
 }
 
 static inline bool CoreState_IsValid(const CoreState_t *s)
@@ -129,6 +133,13 @@ CORE_STATE_INLINE void CoreState_Checkpoint(CoreState_t *s, uint8_t id)
     if (!CoreState_IsPlumbing(id)) {
         s->step = id;
     }
+    s->seq++;
+}
+
+/*! A checkpoint passed in an interrupt: it leaves the thread's cp and step alone. */
+CORE_STATE_INLINE void CoreState_CheckpointIsr(CoreState_t *s, uint8_t id)
+{
+    s->isr = id;
     s->seq++;
 }
 
@@ -272,6 +283,71 @@ static inline CoreVerdict_t CoreWatch_Step(CoreWatch_t *w, const CoreState_t *s,
         v.status = CORE_WATCH_ASLEEP;
     }
     return v;
+}
+
+/* ---- what the survivor saw ------------------------------------------------------ */
+
+#define CORE_SEEN_MAGIC  0xC0DE5E01u
+
+/*!
+ * \brief   The verdict a live core made of the other, kept in the shared region so that it survives a
+ *          reset and is printed at the next BOOT: the only report of a stopped CM4, which cannot print,
+ *          and the proof that the CM0+ was alive when it was seen dead. 36 bytes.
+ *
+ * \details Written at every look; an overdue verdict fills it, any other clears it.
+ */
+typedef struct {
+    uint32_t magic;
+    uint8_t  status;       /*!< CoreWatchStatus_t of the last look: only OVERDUE is kept */
+    uint8_t  alive;        /*!< the heartbeat still moved at that look */
+    uint8_t  cp;           /*!< the checkpoint it was seen at */
+    uint8_t  step;
+    uint32_t hb;
+    uint32_t kept;
+    uint32_t seq;
+    uint32_t silent_ms;    /*!< time with no promised wake served, as the survivor measured it */
+    uint32_t over_ms;
+    uint32_t due_ms;       /*!< the wake it had promised */
+    uint8_t  crash;        /*!< a crash record of that core was valid at that look */
+    uint8_t  isr;          /*!< the last checkpoint passed in an interrupt */
+    uint8_t  pad[2];
+} CoreSeen_t;
+
+_Static_assert(sizeof(CoreSeen_t) == 36u, "CoreSeen_t is at a fixed place in the shared region");
+
+static inline void CoreSeen_Clear(CoreSeen_t *r)
+{
+    uint8_t *p = (uint8_t *)r;
+    for (unsigned i = 0; i < sizeof *r; i++) {
+        p[i] = 0u;
+    }
+}
+
+static inline void CoreSeen_Make(CoreSeen_t *r, const CoreState_t *s, const CoreVerdict_t *v, bool crash)
+{
+    if (v->status != CORE_WATCH_OVERDUE) {
+        CoreSeen_Clear(r);
+        return;
+    }
+    r->magic     = CORE_SEEN_MAGIC;
+    r->status    = (uint8_t)v->status;
+    r->alive     = v->alive ? 1u : 0u;
+    r->cp        = s->cp;
+    r->step      = s->step;
+    r->hb        = s->hb;
+    r->kept      = s->kept;
+    r->seq       = s->seq;
+    r->silent_ms = v->silent_ms;
+    r->over_ms   = v->over_ms;
+    r->due_ms    = v->due_ms;
+    r->crash     = crash ? 1u : 0u;
+    r->isr       = s->isr;
+    r->pad[0] = r->pad[1] = 0u;
+}
+
+static inline bool CoreSeen_IsOverdue(const CoreSeen_t *r)
+{
+    return r->magic == CORE_SEEN_MAGIC && r->status == (uint8_t)CORE_WATCH_OVERDUE;
 }
 
 static inline const char *CoreWatch_StatusName(CoreWatchStatus_t st)

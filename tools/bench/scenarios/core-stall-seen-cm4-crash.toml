@@ -1,0 +1,38 @@
+# Purpose: acceptance. Issue #101, Test Record docs/test-tracker/101-core-stall.md.
+# Claim: the CM0+ that saw a CM4 die also knows it left a crash record, and the next BOOT says both.
+# Node 6 (a C2): its CM4 jumps to an address with no memory 60 s after its boot (BENCH_FAULT_CM4=1) and stops in its
+# BusFault handler, leaving a crash record. The CM0+ keeps running and, at its slot tasks, sees the CM4 serve no
+# promised wake. After the bench reset at +7 min the BOOT prints the crash record of the CM4 (slice 1) and the verdict
+# of the CM0+, CORE_STATE core=cm4 st=overdue by=cm0 crash=1.
+description = "A crashed CM4 is reported at the next BOOT as seen dead by the live CM0+, with its crash"
+timeout = "10m"
+
+[nodes]
+1 = "C3"
+6 = "C2"
+
+[overrides]
+BENCH_FAULT_CM4 = "1"
+BENCH_FAULT_NODE = "6"
+BENCH_FAULT_AFTER_S = "60"
+
+[[action]]
+reset = 6
+at = "+7m"
+
+[[expect]]
+node = 6
+event = "CORE_CRASH"
+where = { core = "cm4", kind = "bus", why = "ibuserr", pc = "60000000" }
+within = "9m"
+
+[[expect]]
+node = 6
+event = "CORE_STATE"
+where = { core = "cm4", st = "overdue", by = "cm0", alive = "0", crash = "1" }
+within = "9m"
+
+[[forbid]]
+node = 1
+event = "CORE_STATE"
+where = { st = "overdue" }
