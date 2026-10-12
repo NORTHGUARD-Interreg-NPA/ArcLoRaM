@@ -17,6 +17,7 @@ Work is tracked as GitHub issues with the `bench` label.
 cd tools/bench
 uv sync
 uv run pytest
+uv run pytest -m scale    # a record of days: 10 nodes over 72 h, about a minute (after a change to the pull or the judge)
 ```
 
 Run it from anywhere in the repo with `uv run --project tools/bench bench ...`.
@@ -181,28 +182,95 @@ Before writing, every loadable segment of each image must fall inside its own co
 ## Judging from the log collector
 
 A run of many hours does not need the host on: the log collector (a server that stores every Pi Node's UART log) keeps the record while the host is off.
-`bench flash` arms the boards, then the scenario is decided later from the collector's lines, with the same expect file as `bench run` (`expect_spec`) and the same engine (arclog's `expect`):
+`bench flash` arms the boards, then the scenario is decided later from the collector's lines, with the same expect file as `bench run` (`expect_spec`) and the same engine (arclog's `expect`).
+Two steps, each usable alone:
 
 ```sh
+# 1. Pull: copy the collector's lines into the run folder. Repeat it as often as wanted, in a shell loop if need be.
+uv run --project tools/bench python -I -m bench.pull --collector <base URL of the collector> \
+  --build <Build ID> --since <UTC time before the flash> \
+  --node 2=nuna-node-03 --node 5=nuna-node-01 --dir tools/arclog/runs/<start>-<build>-collector
+
+# 2. Judge: decide the scenario from the folder. With --collector (or $BENCH_COLLECTOR_URL) it pulls first.
 BENCH_COLLECTOR_URL=<base URL of the collector> uv run --project tools/bench python -I -m bench.collector \
   scenarios/x.toml --build <Build ID> --since <UTC time before the flash> \
   --node 2=nuna-node-03 --node 5=nuna-node-01 --dir tools/arclog/runs/<start>-<build>-collector
 ```
 
-Exit code 0 pass, 1 fail, 2 no verdict yet, 3 an invalid scenario or argument, 4 the record is invalid; it can be run at any time, as often as wanted.
-It prints per node the lines, the last line and its age, the `BOOT`s and the `SLOT` count per hour, and a `WARN` line for every cause it finds.
+`--no-pull` judges the folder as it is, without asking the collector.
+`--until <UTC time>` ends the run when the folder holds a later run of the same nodes.
+`--verbose` prints the detail too.
+Exit code of the judge: 0 pass, 1 fail, 2 no verdict yet, 3 an invalid scenario or argument (or a collector that cannot be reached), 4 the record is invalid; it can be run at any time, as often as wanted.
+
+### The pull
+
+The collector answers `/logs` with its newest 10000 lines unless it is paged, so a run of hours, or of several nodes, does not fit one answer: a judge that asked once judged a truncated record (the swap soak of 2026-10-07 failed its smoke check for that reason, #111).
+The pull asks one node per call, with `after` (the cursor of the previous answer), `format=json` and `exclude=pi` (the Pi's heartbeat), and keeps asking until the collector says `truncated=false`.
+`after` pages oldest first from a cursor and there is none for a time, so a node's first pull asks for the newest lines since the start of the run and goes back with `until` while the collector says `truncated`.
+
+The run folder is the record, and it is append-only and idempotent:
+
+| File | Holds |
+|---|---|
+| `<node>-YYYYMMDD.log` | the node's trace lines, `<UTC>\t<device line>`, by UTC day (what every arclog tool reads) |
+| `<node>-events.log` | what the collector saw besides the trace: openocd crash lines, its own connects and disconnects, marks |
+| `pull.json` | the build, the schema, where each node's pull stands (its cursor and the time it is complete to), the collector's view of each node at the end of the pull (`pi_ntp`, `clock_lag_s`, `connected_since`, ...), and what makes a node's record unfit; it holds no address of the collector |
+| `schema.json` | the event table of the build, see below |
+| `judge.log` | the last judge's detail |
+
+- A second pull adds only what the collector got since; an answer that is smaller than what the folder holds never shrinks it.
+- A chunk is committed as a whole: its lines are appended, then the cursor is saved. A pull cut short is rolled back to the last committed chunk the next time, so no line is twice in the folder and none is missed.
+- The collector stores a line it recovered after a reconnect after the lines that came live, with its own, older, Pi time. The folder keeps the order of arrival and the reader (`arclog.stream`) puts such a line back in place, up to the Pi's replay buffer of one hour.
+- It never de-duplicates on the text of a line: two runs of the same build print the same device lines at their start. A line is told by the collector's id.
+- It refuses a folder that holds capture files and no `pull.json` (a record of the earlier judge, or of `arclog capture`), a folder pulled for another build, and a start earlier than the folder's: pull into a new folder.
+
+The collector alone is the record of a run decided this way, and its health is part of the validity check below.
+The host's capture (`tools/arclog/runs/bench/`) is a backup, read by hand when the collector is in doubt; it is not merged in, because a second source needs a key that tells two lines apart, and the only one both have is the line's text.
+
+### The judge
+
+It streams the folder in time order, the nodes merged, and keeps only what the expectations need: its memory is the same for 18 h and for 72 h of the same nodes, and does not follow the length of the run.
+What it prints is of a fixed size: the verdict, one line per node (lines, last line and its age, `BOOT`s, `SLOT` per hour as minimum, median and maximum over the whole hours), the first five causes and the number of the others, the record line.
+The stage-by-stage detail (every completed stage, every node's `SLOT` per hour, every cause) is in `judge.log` in the folder.
+An agent decides a run from that summary and does not read the record or the stage lines.
+
 A bench fault makes the run invalid, exit 4 whatever the verdict, because the record says nothing about the firmware:
 - a Pi clock not NTP-synchronised, or more than 5 s from the collector's;
 - a Pi Node the collector does not know, or is not connected to;
 - lines lost across a collector reconnect after the start (a reconnect alone is not one: the Pi replays what it buffered, and the trace's sequence numbers say whether that was enough).
+
+A record that is not whole is not judged at all (`INVALID the record is not whole`, exit 4, no verdict), because a verdict on it would be about the export and not about the nodes: a missing `BOOT` is not a node that did not boot.
+- a node that was not pulled, or whose pull did not finish (a pull cut short, or still `truncated`);
+- a collector that no longer holds the start of the run (its oldest line for the node is after the start of the record);
+- a collector whose storage started over or changed generation behind the cursor;
+- a pull that could not go on.
+
+Two more causes are found while reading: lines more than the replay buffer's hour out of order (the record cannot be put in time order), and a gap in the sequence numbers right after a place where the pull cut the collector's lines into chunks, which is taken for the export's and not the firmware's (pull into a new folder: if the gap moves, it was the export).
 
 A firmware event is listed as a `WARN` too: lost lines, a reboot nobody planned, a board that never booted the Build ID.
 It fails the run as the engine says; it invalidates the run (exit 4) only when the scenario says `dataset = true`.
 A node fault does not invalidate the run.
 With `max_silence` in the scenario, a node with no line for longer than it fails the run (exit 1) even when every expectation was met.
 Without it the tool only warns when the collector has seen no line from a connected node for over 10 min.
-The collector writes the Pi's local time without a zone and matches `since=` against it: the tool converts through `--pi-tz` (default `Europe/Paris`) and flags a Pi clock that differs from the collector's receive time.
 A node that stops logging is caught by `max_silence`, or by a staged `[[expect]]` on a count of its `SLOT` events.
+The clock the judge uses is the time the pull was complete to, so a stale folder never fails an expectation for lines that were not asked for yet.
+
+#### The schema of the build
+
+The arclog schema changes with the firmware (#36 added `g` and `win` to `RX_WIN`), so a record has to be read with the schema of the build that wrote it and not of the checkout that judges it: a checkout after #36 reported `FAIL RX_WIN: missing g,win` on a healthy run of an older build.
+The first pull reads `tools/arclog/src/arclog/schema.py` as the firmware commit of the Build ID had it (`git show <commit>:...`, read as a syntax tree, never run), and keeps the table in `schema.json`.
+The judge uses that table and says which one (`schema commit e34092f` in the record line).
+When git does not have the commit it uses the checkout's and says so in a `WARN schema`; a dirty Build ID (`-d...`) is read at its commit, and its uncommitted schema changes are not known.
+
+#### What the collector keeps
+
+Read from `GET /nodes` on 2026-10-08, on the soak of 2026-10-07: each node has its own store of up to `max_bytes` = 100 MiB, and `oldest_line_at` and `stored_bytes` say what is held.
+The C2 (Node 5, `nuna-node-01`) stored 2.1 MB in 31.5 h, 66 KB an hour; the C3 (Node 2, `nuna-node-03`) 1.2 MB in 31.3 h, 37 KB an hour (a line is about 130 bytes, the Pi's heartbeat included).
+At the C2's rate, 10 nodes for 72 h are 48 MB in all and 4.8 MB per node, a twentieth of a store; a store reaches its cap after 64 days of a C2.
+What the collector does at the cap was not observed; the pull treats a storage that starts over or changes generation as an unfit record.
+`limit` is capped at 1000000 lines per call, which is not a limit of the pull: 72 h of a node are about 52000 lines, fetched 20000 at a time (`--chunk`).
+Scale, from a fake collector with the same paging (`pytest -m scale`, on a laptop under WSL2, 2026-10-08): 10 nodes over 72 h are 520450 lines; the pull takes 19 s in 32 requests, the judge 16 s at a peak of 27 MB (the same 27 MB as for 18 h of the same nodes), and prints 13 lines.
+The collector knew 8 Pi Nodes on that day (`nuna-node-01` to `08`), 3 of them with data.
 
 ## Run record, manifest and validity
 
