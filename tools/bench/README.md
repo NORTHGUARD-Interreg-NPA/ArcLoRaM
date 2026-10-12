@@ -150,6 +150,15 @@ event = "TX_LATE"
 - A range never matches a field that is not a number; `{ min = 2 }` or `{ max = -2 }` alone bound one side.
 - On the command line, `--expect "<ID|any> <EVENT> [field=value ...] [within=8m] [count=2]"`, a range as `err=-1..1`, `err=..-2` or `err=2..`, `--watch ID`, `--forbid EVENT`, `-D NAME=VALUE`, `--timeout`; `--save FILE` writes them as a scenario file.
 
+A template scenario names the board under test as Node ID 0, and `--as ID` aims it at a real board:
+
+```sh
+bench scenario check scenarios/onboard.toml --as 7
+bench run scenarios/onboard.toml --as 7 --probe-uid nuna-node-09
+```
+
+The record keeps the real scenario (node 7), so `bench validate` loads it again.
+
 Reset is the only action for now.
 Halting a core needs a hot-plug SWD connection, which fails while the firmware sleeps in STOP2 with the debug port off; it needs the firmware to keep debug alive in STOP2 first.
 
@@ -285,7 +294,8 @@ Its ST-LINK is bypassed, so bench reaches it by name, not by probe serial number
 The design and its open points are in `docs/adr/0002-remote-boards-through-pi-nodes.md`.
 
 ```toml
-# ~/.config/bench/bench.toml, or the file named by $BENCH_CONFIG
+# tools/bench/pi-nodes.toml (the shared fleet, in the repo), then
+# ~/.config/bench/bench.toml, or the file named by $BENCH_CONFIG (this machine)
 [[remote]]
 name = "nuna-node-01"     # capture node and display name (default: host)
 host = "nuna-node-01"     # MagicDNS name or tailnet address
@@ -293,15 +303,22 @@ gdb  = 3333               # OpenOCD GDB port of the M4 (default)
 log  = 4000               # UART log port (default)
 ```
 
-- The file says where to look.
-  Node IDs and classes stay out of it: a board is recognised by its UID, and its class is the scenario's.
+- Two files, same format.
+  `tools/bench/pi-nodes.toml` is the fleet every checkout shares: a new Pi Node is added there, by its MagicDNS short name, so nobody rediscovers it.
+  The repo is public: no tailnet domain and no address in it.
+  The per-machine file is layered on top: an entry with the same `name` replaces the shared one (pin an address, change a port), a new `name` is added.
+  A node that is off, or not on your tailnet, shows as "not answering" in `bench boards`.
+- The files say where to look.
+  Node IDs and classes stay out of them: a board is recognised by its UID, and its class is the scenario's.
 - `bench boards` lists a Pi Node whose log port answers as `pi-node <name>`, and names the ones that do not answer.
   It opens only the read-only log port.
   The GDB port is a debug session, opened to read a UID (`--probe-uids`), flash or reset.
 - `bench capture up` records a Pi Node's log with the local ones, in `<name>-YYYYMMDD.log`.
   Each line is stamped with the controller's UTC clock; the Pi's own stamp (its local time, no zone) is dropped.
 - UID read, flash and reset go through `src/bench/pinode.py`: GDB (CubeIDE's `arm-none-eabi-gdb.exe`, or `$BENCH_GDB`) to the Pi's OpenOCD.
-- A new board's first run is onboarding: read its UID, add it to `Common/Protocol/node_id.c` with the next free Node ID, flash once.
+- A new board's first run is onboarding: read its UID, add it to `Common/Protocol/node_id.c` with the next free Node ID, flash once, then run `scenarios/onboard.toml --as <Node ID>`: a lone C3 whose flash, boot, log, radio transmit, STOP2 sleep and two resets (against a sleeping board) all show in the trace (Test Record `docs/test-tracker/spot-20261010-onboard-board.md`).
+- A NUCLEO that still runs the factory firmware cannot be reached over SWD through a Pi Node (the debug port is dead a second after reset): flash it once by hand on a PC with its Pi wires removed, then move it to the Pi.
+  A board whose ST-LINK says "No STM32 target found" is still wired to something that drives its SWD or NRST pins.
   `bench boards --probe-uid nuna-node-02` reads that one board's UID (a GDB session); `--probe-uids` reads every unknown board, which on a Pi Node is a debug session on a shared board.
 - OpenOCD's own README, and where its command reference is, are in `docs/reference/`.
 - Status: host-tested, and run end to end on `nuna-node-02` on 2026-10-04 (UID read, flash of both cores, a scenario run, a reset; `docs/test-tracker/spot-20261004-pinode-c2.md`).

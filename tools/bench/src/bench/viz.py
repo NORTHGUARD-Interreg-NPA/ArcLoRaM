@@ -169,7 +169,7 @@ def render_html(snap: dict, fragment: bool = False) -> str:
     counts = (f"<b>{len(boards)}</b> connected: {free} free, {held} held, {new} new"
               + (f", <b>{len(down)}</b> not answering" if down else ""))
     if not boards and not down:
-        topology = '<div class="none">No board connected. Plug in a NUCLEO, or add a Pi Node to ~/.config/bench/bench.toml.</div>'
+        topology = '<div class="none">No board connected. Plug in a NUCLEO, or add a Pi Node to tools/bench/pi-nodes.toml.</div>'
     else:
         topology = (f'<div class="pc"><div class="name">this PC</div><div class="sub">worktree '
                     f'{escape(snap["worktree"])}</div></div>'

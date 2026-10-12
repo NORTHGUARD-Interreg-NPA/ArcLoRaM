@@ -1,0 +1,38 @@
+# The Pi Nodes of the shared bench fleet, read by every checkout (ADR-0002).
+# Same format as ~/.config/bench/bench.toml, which is layered on top of this file:
+# a machine entry with the same name wins (pin an address there), a new name is added.
+#
+# This repo is public: list MagicDNS short names only, never the tailnet domain or an address.
+# The file says where to look. Node IDs and classes stay out of it: a board is recognised
+# by its UID (Common/Protocol/node_id.c), and its class is the scenario's.
+# A node that is off or not on your tailnet is listed by `bench boards` as "not answering".
+#
+# A new Pi Node: add a [[remote]] with its host name, then onboard its board
+# (tools/bench/README.md, "Remote boards").
+
+[[remote]]
+host = "nuna-node-01"
+
+[[remote]]
+host = "nuna-node-02"
+
+[[remote]]
+host = "nuna-node-03"
+
+[[remote]]
+host = "nuna-node-04"
+
+[[remote]]
+host = "nuna-node-05"
+
+[[remote]]
+host = "nuna-node-06"
+
+[[remote]]
+host = "nuna-node-07"
+
+[[remote]]
+host = "nuna-node-08"
+
+[[remote]]
+host = "nuna-node-09"

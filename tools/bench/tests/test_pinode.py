@@ -138,6 +138,44 @@ def test_the_uid_is_read_with_one_memory_read_and_no_halt():
     assert gdb.commands == [*SETS, TARGET, "monitor mdw 0x1FFF7590 3", "detach"]
 
 
+class SeqGdb(Gdb):
+    """A GDB that answers each session with the next canned transcript."""
+
+    def __init__(self, *outs):
+        super().__init__()
+        self.outs = list(outs)
+
+    def __call__(self, argv):
+        self.calls.append(argv)
+        return 0, self.outs.pop(0)
+
+    def commands_of(self, i):
+        return [self.calls[i][j + 1] for j, a in enumerate(self.calls[i]) if a == "-ex"]
+
+
+ZERO_UID_LINE = "0x1fff7590: 00000000 00000000 00000000"
+
+
+def test_a_zero_uid_is_read_again_after_a_reset_halt_and_the_board_is_let_run():
+    gdb = SeqGdb(f"{ZERO_UID_LINE}\n", f"{UID_LINE}\n")
+    assert link(gdb).read_uid() == (0x0014008F, 0x32325014, 0x20383543)
+    assert gdb.commands_of(0) == [*SETS, TARGET, "monitor mdw 0x1FFF7590 3", "detach"]
+    assert gdb.commands_of(1) == [*SETS, TARGET, "monitor reset halt", "monitor mdw 0x1FFF7590 3",
+                                  "monitor reset run", "detach"]
+
+
+def test_a_uid_that_stays_zero_after_a_reset_halt_is_an_error():
+    gdb = SeqGdb(f"{ZERO_UID_LINE}\n", f"{ZERO_UID_LINE}\n")
+    with pytest.raises(ProgrammerError, match="zero"):
+        link(gdb).read_uid()
+
+
+def test_a_real_uid_is_read_once_and_the_board_is_not_reset():
+    gdb = SeqGdb(f"{UID_LINE}\n")
+    link(gdb).read_uid()
+    assert len(gdb.calls) == 1
+
+
 def test_a_reply_without_the_uid_is_an_error():
     with pytest.raises(ProgrammerError, match="UID"):
         link(Gdb("0x1fff7590: \n")).read_uid()

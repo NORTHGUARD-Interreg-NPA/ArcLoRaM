@@ -173,14 +173,25 @@ class PiNodeLink:
                                   or "; ".join(last) or f"gdb exit code {code}"))
         return out
 
-    def read_uid(self) -> tuple[int, int, int]:
-        """Chip UID over SWD, one memory read: the core is not halted and the board does not reboot
-        (unlike the ST-LINK read, which connects under reset)."""
-        out = self._session(_MDW_UID)
+    def _uid(self, out: str) -> tuple[int, int, int]:
         m = _UID_RE.search(out)
         if not m:
             raise ProgrammerError(f"{self.remote.name}: no UID in the GDB output")
         return int(m[1], 16), int(m[2], 16), int(m[3], 16)
+
+    def read_uid(self) -> tuple[int, int, int]:
+        """Chip UID over SWD, one memory read: the core is not halted and the board does not reboot
+        (unlike the ST-LINK read, which connects under reset).
+        An all-zero UID is no chip's: the core is held in reset and flash reads zero (#103, or a new
+        board whose firmware stops SWD, reachable only under reset). The board is then reset-halted,
+        read and let run, the way a flash starts."""
+        uid = self._uid(self._session(_MDW_UID))
+        if uid != (0, 0, 0):
+            return uid
+        uid = self._uid(self._session("monitor reset halt", _MDW_UID, "monitor reset run"))
+        if uid == (0, 0, 0):
+            raise ProgrammerError(f"{self.remote.name}: the UID reads zero even after a reset halt")
+        return uid
 
     def flash(self, images: dict[str, Path]) -> str:
         """Write and verify both cores' images in one session, then reset and run."""
