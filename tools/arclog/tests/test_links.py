@@ -78,3 +78,13 @@ def test_no_link_ends_at_a_c3_which_never_listens():
     streams = {"a": [line("a", 0, "BOOT", mod="S", cls="C3"), *tx("a", 5, 1)],
                "b": [line("b", 0, "BOOT", mod="S", cls="C2"), *rx("b", 6, 1, -100, -10), *tx("b", 25, 2)]}
     assert [(l.tx, l.rx) for l in link_stats(streams)] == [("a", "b")]
+
+
+def test_packets_sent_while_the_receiver_was_still_booting_are_not_offered_to_it():
+    # b's trace begins at 0 (its flash), but it boots at 30 s: the packets of a at 5 s and 25 s found nobody listening.
+    streams = {
+        "a": [line("a", 0, "BOOT", mod="S", cls="C3"), *tx("a", 5, 1), *tx("a", 25, 2), *tx("a", 45, 3), *tx("a", 65, 4)],
+        "b": [line("b", 0, "INIT_DONE", mod="S"), line("b", 30, "BOOT", mod="S", cls="C2"), *rx("b", 46, 3, -100, -10)],
+    }
+    [link] = link_stats(streams)
+    assert (link.sent, link.heard) == (2, 1)
