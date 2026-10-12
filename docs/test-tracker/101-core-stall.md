@@ -7,7 +7,8 @@ The issue stays open until a real stall is explained by these records, so this T
 
 - **Slice 1: the crash record on both cores, the CM4's BusFault/UsageFault/MemManage handlers, and the reset cause in `BOOT`.** They change no behaviour; they cover criteria 1 and 5.
 - **Slice 2: the heartbeat, the checkpoints and the promised wake of each core, watched by the CM4 (the "Core State").** They add a few stores per checkpoint; they cover criteria 2, 3 and 7.
-- Not started: the survivor's report in the other direction and the dead-CM4 case (criterion 4), the audit of the waits (criterion 6), the bad jump (criterion 8), the soak that waits for the next stall (criterion 9).
+- **Slice 3: the CM0+ looks at the CM4 and keeps what it saw; the next `BOOT` reports a stopped CM4 as seen dead by a live CM0+, with its crash record flag.** It covers criterion 4.
+- Not started: the audit of the waits (criterion 6), the bad jump (criterion 8), the soak that waits for the next stall (criterion 9).
 
 Clock: NUCLEO (development crystal), not the production TCXO, for every run of this record.
 
@@ -23,6 +24,8 @@ Clock: NUCLEO (development crystal), not the production TCXO, for every run of t
 | `tools/bench/scenarios/core-stall-state-cm0-loop.toml` | Node 6's CM0+ loops for ever at the checkpoint `rx_set` (`BENCH_LOOP_CM0=4`). The CM4 prints `CORE_STATE core=cm0 st=overdue cp=rx_set step=rx_set alive=0`, and the next `BOOT` prints the state the previous run left, `st=boot cp=rx_set` |
 | `tools/bench/scenarios/core-stall-state-lost-wake.toml` | Node 6 skips one Alarm A programming (`BENCH_SKIP_ALARM=1`): `CORE_STATE core=cm0 st=overdue step=alarm_set alive=1 over>=1`, a live core whose promised wake did not come |
 | `tools/bench/scenarios/core-stall-state-cm4-loop.toml` | Node 6's CM4 loops for ever in its SysTick handler (`BENCH_LOOP_CM4=35`), the context of silence event 4. Its next `BOOT` prints `CORE_STATE core=cm4 st=boot cp=systick` (the CM0+ cannot print for a dead CM4) |
+| `tools/bench/scenarios/core-stall-seen-cm4-loop.toml` | Node 6's CM4 loops for ever in its main loop (`BENCH_LOOP_CM4=32`) and prints nothing more. Its CM0+ keeps running, looks at the CM4 at its slot tasks and writes down that no promised wake was served. After the bench reset, the CM4's `BOOT` prints `CORE_STATE core=cm4 st=overdue by=cm0 step=loop alive=0 crash=0`: a dead CM4 reported as such, by the live CM0+ |
+| `tools/bench/scenarios/core-stall-seen-cm4-crash.toml` | The same with a crash: the CM4 jumps to an address with no memory (`BENCH_FAULT_CM4=1`). The `BOOT` prints its `CORE_CRASH` (slice 1) and the CM0+'s verdict with `crash=1` |
 | `tools/bench/scenarios/core-stall-state-cost.toml` | Measurement (`BENCH_PROBE=1`): what a checkpoint, a heartbeat, a read of the tick and the promise of a wake cost on the CM0+ |
 
 A forced act is a Build Override (`BENCH_FAULT_CM4` or `BENCH_FAULT_CM0` picks the kind of fault, `BENCH_LOOP_CM4` or `BENCH_LOOP_CM0` the checkpoint to loop at, `BENCH_SKIP_ALARM` loses one wake, `BENCH_FAULT_NODE` the one board to fault, `BENCH_FAULT_AFTER_S` the seconds after boot, 60 in the scenarios); no other build contains it.
@@ -93,6 +96,15 @@ The scenarios cover them.
 - **The report of the next `BOOT` cannot tell a lost wake from a sleep**: a healthy node also ends on `stop_in`. Only the silence the survivor measured can, so the lost-wake scenario expects the live line only. The `BOOT` report is the evidence for a core that cannot be seen alive, the CM4 (the loop scenarios).
 - **The trap of the forced acts stays**: the same gate, in the same shared RAM; see "State after the second session".
 
+## Findings and decisions of slice 3
+
+- **A dead CM4 cannot be told anything, so the CM0+ writes what it saw.** The trace of a node goes through the CM4: a CM0+ that sees the CM4 stop has nothing to print on. It keeps its verdict in the shared region (`g_core_seen_cm4`, 36 bytes, not cleared by a reset) and the next `BOOT` prints it: `CORE_STATE core=cm4 st=overdue by=cm0 ... alive=0 crash=0|1`. Any look that finds the CM4 fine clears it, so a healthy node prints nothing. The CM4 does the same for the CM0+ (`g_core_seen_cm0`, also printed live), which prints it once more at its own next `BOOT`.
+- **The CM4 promises its own wake**: its 30 s look at the CM0+ is a promise to the CM0+, served at each look (`kept`). That is what the CM0+ judges, with the same pure judge and the same 5 s margin.
+- **The CM0+ looks without a timer of its own**, at the slot task and the radio interrupt, which already know the time of day. A timer would add a wake and further starts and stops of the RTC wake-up timer, the very write-protect race #75 "Serialise Alarm A programming against RTC writes" is about, in a task that hunts stalls. The price: between two slots, hours on the PROD profile, a CM4 that stops is seen at the next slot. A Sync packet that sets the RTC resynchronises the look (the time of day jumps).
+- **Interrupt checkpoints have a slot of their own.** The first scenario printed `cp=systick seq=314071` for a CM4 stuck in its main loop: SysTick interrupts a thread a thousand times a second and wrote over the checkpoint of the thread. `isr` now holds the last checkpoint passed in an interrupt (SysTick, the radio) and `cp` and `step` the thread's. The run `20261012T204737Z` shows the flaw, the runs after it the fix.
+- **`crash=1` names the case of events 3 and 4** (the CM4 halted with a record) apart from a CM4 that is only stuck. The record itself is the `CORE_CRASH` of slice 1, printed by the CM4 at the same `BOOT`.
+- **Not covered**: a CM4 that dies while the CM0+ is in Scanning Rx or in a long gap sees no slot task, so no look. The verdict then comes late, or not before the next reset. A timer is the cure and #100 "Cross-core liveness: each core checks the other and restarts a stalled one" will bring one if it needs it.
+
 ### Measurement: the cost of the liveness record (criterion 7)
 
 CM0+ at 4 MHz (`hz=4000000`), NUCLEO Clock, Debug build (no optimisation, `-O0`), `BENCH_PROBE=1`, 100 or 10 calls per segment with the loop overhead (260 us per 100 iterations) taken off. The probe lines are in the run records `20261012T185730Z` (the first measurement, checkpoint not yet inlined), `20261012T190450Z` and `20261012T200338Z` (final: the same figures).
@@ -109,14 +121,14 @@ CM0+ at 4 MHz (`hz=4000000`), NUCLEO Clock, Debug build (no optimisation, `-O0`)
 - A locked C2 slot passes about 25 to 30 checkpoints (the slot task, the MAC decision, `rx_set`, `rx_armed`, `alarm_set`, the radio interrupts, a pair for every trace call, the two Stop2 crossings): **about 0.5 ms**, with the heartbeat (a few passes, about 20 us) and **one promise per alarm programming, 0.27 ms**: **about 0.8 ms per slot**, one slot every 20 s on the DEV Sync profile (0.004 %).
 - On the path to the radio in Rx only the checkpoints before it count, about six (the slot task, the MAC decision, two trace calls, `rx_set`): **about 0.1 ms** added to the Rx start latency the guard policy carries (`GUARD_RX_START_LATENCY_US`), against a guard of 10 ms. The promise is computed in `plat_program_alarm_a`, after the radio is armed (`tdma_machine.c` programs the alarm after `RadioSetRx` and `RadioSend`). The Rx start probe of #36 should be run again before that constant is tightened.
 - A `-Os` production build will cost less; the figures above are the bench build's.
-- **RAM: 48 bytes**, two records of 24 bytes in the shared region (`g_core_state_cm0`, `g_core_state_cm4`), nothing else.
+- **RAM: 48 bytes** for the two states (`g_core_state_cm0`, `g_core_state_cm4`, 24 bytes each) and 72 bytes for what each core saw of the other (`g_core_seen_cm0`, `g_core_seen_cm4`, 36 bytes each, slice 3): 120 bytes in all, in the shared region. A look costs a few compares (the CM0+ at a slot, once in 5 s or more).
 
 ## Criteria
 
 - [x] A forced HardFault on the CM0+ and on the CM4 (a Build Override each) leaves a crash record with the PC, LR, xPSR and, on the CM4, the fault status, and a `CORE_CRASH` line at the next `BOOT` (or, for a dead core, the record read by `bench postmortem` of #67). Slice 1: the four `core-stall-crash-*` scenarios, each PASS in Runs (CM4 bus fault `3a9712f-dfe26d7-o485b25`, forced HardFault `-o655361`, data bus error `bef45d4-ob2c30b`, CM0+ `bef45d4-o614be6`). The line comes at the next `BOOT`, the reset being bench's: a halted core cannot print, and the read of a halted core is #67
 - [x] A forced endless loop at a checkpoint of each core (the Override picks the id) gives a `CORE_STATE` line that names that core and that checkpoint (for a stopped CM4, at the next `BOOT`). Slice 2: `core-stall-state-cm0-loop.toml` (`rx_set` on the CM0+, live from the CM4 and at the next `BOOT`) and `core-stall-state-cm4-loop.toml` (`systick` on the CM4, at the next `BOOT`), each PASS in Runs
 - [x] A forced lost wake (the Override skips one Alarm A programming) gives the alarm checkpoint and an overdue deadline. Slice 2: `core-stall-state-lost-wake.toml`, PASS in Runs (`step=alarm_set`, `over` past the promise, `alive=1`)
-- [ ] A dead CM4 with a live CM0+ is reported as such, not as a silent CM0+. Slice 3
+- [x] A dead CM4 with a live CM0+ is reported as such, not as a silent CM0+. Slice 3: `core-stall-seen-cm4-loop.toml` and `core-stall-seen-cm4-crash.toml`, each PASS in Runs: the next `BOOT` prints `CORE_STATE core=cm4 st=overdue by=cm0 alive=0`, from the verdict the live CM0+ left
 - [ ] `BOOT` carries the reset cause on both cores, checked after a power cycle, a pin reset and a `bench reset`. Slice 1: `core-stall-reset-cause.toml` for the `bench reset`, and by hand for the power cycle and the pin reset
 - [ ] The audit of the waits of both cores is written down (in the Test Record or an ADR) with each decision. Slice 4
 - [x] The cost of the checkpoints is measured with `timing-probe` (microseconds per slot) and the RAM it takes is stated. Slice 2: the measurement above, `core-stall-state-cost.toml`: 16 us a checkpoint, about 0.8 ms a slot, 48 bytes
@@ -146,6 +158,12 @@ CM0+ at 4 MHz (`hz=4000000`), NUCLEO Clock, Debug build (no optimisation, `-O0`)
 | 2026-10-12 19:48 | `core-stall-state-cm4-loop.toml` | `bef45d4-dca297e-o7084c0` | PASS | `tools/arclog/runs/20261012T194827Z-bef45d4-dca297e-o7084c0/` | The CM4 looped in SysTick; after the bench reset its `BOOT` was followed by `CORE_STATE core=cm4 st=boot cp=systick` |
 | 2026-10-12 19:54 | `core-stall-state-cm0-loop.toml` | `bef45d4-dca297e-ocbfe6f` | PASS | `tools/arclog/runs/20261012T195437Z-bef45d4-dca297e-ocbfe6f/` | The final code: overdue with `alive=0` at +277 s, and the `BOOT` report at +462 s |
 | 2026-10-12 20:03 | `core-stall-state-cost.toml` | `bef45d4-d85f795-od66516` | measurement | `tools/arclog/runs/20261012T200338Z-bef45d4-d85f795-od66516/` | The final code (with `kept`): the same figures as 19:04 |
+| 2026-10-12 20:47 | `core-stall-seen-cm4-loop.toml` | `07b4fe2-d7655a1-o79d1b9` | invalid | `tools/arclog/runs/20261012T204737Z-07b4fe2-d7655a1-o79d1b9/` | Wrong expectation, and a flaw found: the next `BOOT` printed `CORE_STATE core=cm4 st=overdue by=cm0 cp=systick step=systick hb=10 kept=3 seq=314071 due=30000 silent=180000 over=150000 alive=0 crash=0`, so the CM0+ did see the CM4 dead, but the SysTick interrupt, a thousand times a second, had written over the checkpoint of the stuck thread. Interrupt checkpoints now have their own slot (`isr`) |
+| 2026-10-12 21:00 | `core-stall-seen-cm4-loop.toml` | `07b4fe2-d449221-o79d1b9` | PASS | `tools/arclog/runs/20261012T210034Z-07b4fe2-d449221-o79d1b9/` | `CORE_STATE core=cm4 st=overdue by=cm0 cp=loop step=loop isr=systick hb=11 kept=3 seq=331198 due=30000 silent=200000 over=170000 alive=0 crash=0` at the `BOOT` after the bench reset. The CM4 stopped serving its 30 s wake 200 s before the CM0+ was done writing it down |
+| 2026-10-12 21:11 | `core-stall-seen-cm4-crash.toml` | `07b4fe2-d449221-o485b25` | PASS | `tools/arclog/runs/20261012T211100Z-07b4fe2-d449221-o485b25/` | The same `BOOT` printed `CORE_CRASH core=cm4 kind=bus why=ibuserr pc=60000000` (slice 1) and `CORE_STATE core=cm4 st=overdue by=cm0 cp=loop step=loop isr=systick hb=10 kept=2 seq=81 silent=200000 over=170000 alive=0 crash=1` |
+| 2026-10-12 21:20 | `core-stall-state-cm4-loop.toml` | `07b4fe2-d449221-o7084c0` | PASS | `tools/arclog/runs/20261012T212023Z-07b4fe2-d449221-o7084c0/` | Slice 2 scenario on the slice 3 code, its expectation moved from `cp=systick` to `isr=systick` |
+| 2026-10-12 21:26 | `core-stall-state-cm0-loop.toml` | `07b4fe2-d449221-ocbfe6f` | PASS | `tools/arclog/runs/20261012T212632Z-07b4fe2-d449221-ocbfe6f/` | Slice 2 scenario on the slice 3 code, unchanged: no regression from the interrupt slot |
+| 2026-10-12 21:35 | `core-stall-state-lost-wake.toml` | `07b4fe2-d99d790-oc31b7f` | PASS | `tools/arclog/runs/20261012T213536Z-07b4fe2-d99d790-oc31b7f/` | Slice 2 scenario on the slice 3 code, unchanged |
 
 ## State after the second session
 
@@ -160,3 +178,9 @@ CM0+ at 4 MHz (`hz=4000000`), NUCLEO Clock, Debug build (no optimisation, `-O0`)
 - Criterion 2 is ticked after Simon reworded it (2026-10-12) from "each checkpoint of each core" to "a checkpoint of each core"; the issue changed first. Two ids were forced, `rx_set` and `systick`; the other thirteen differ only by the place of the macro.
 - Not done: the power cycle and the NRST press of criterion 5 (hands on the bench).
 - The report of a dead CM4 by the CM0+ (criterion 4) is slice 3: the CM0+ cannot print through a dead CM4, so it is the record in RAM that a post-mortem reads (#67), and #100 for the restart. The CM4 does not yet read the CM0+ record of a crash it did not make.
+
+## State after the fourth session
+
+- Slice 3 is built and its scenarios pass (Runs). Criterion 4 is ticked; with criteria 1, 2, 3 and 7, five of the nine are done.
+- Left: criterion 5 (the power cycle and the NRST press, hands on the bench), criterion 6 (the audit of the waits that cannot time out, a reading task that needs no board), criterion 8 (what branches to the bad address: the records now exist, the next real stall or a forced one with them will show it) and criterion 9 (the next real stall, which needs Node 2 as a C2: its Pi does not answer).
+- The first stall to be explained will say, on the CM0+: `CORE_STATE st=overdue` with `step=` the checkpoint, `alive=`, and on the CM4: its `CORE_CRASH` if it faulted, else `CORE_STATE ... by=cm0` with the checkpoint it stood at; a lockup that records nothing shows as `alive=0` with no crash record.

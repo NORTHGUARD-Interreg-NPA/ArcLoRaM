@@ -272,6 +272,8 @@ typedef struct {
  *   g_reset_flags                          4 B   CM4 -> CM0+
  *   g_core_state_cm0                      24 B   CM0+ -> CM4 (the survivor's look)
  *   g_core_state_cm4                      24 B   CM4 -> CM0+
+ *   g_core_seen_cm0                       36 B   CM4 (what it saw of the CM0+) -> next BOOT
+ *   g_core_seen_cm4                       36 B   CM0+ (what it saw of the CM4) -> next BOOT
  *   (total: about 1.3 KB; the rest remains reserved for future buffers)
  *
  * The last three survive a reset on purpose, and SharedMem_Init() leaves them
@@ -292,6 +294,8 @@ extern CoreCrash_t              g_core_crash_cm4;       /*!< The CM4 fault handl
 extern uint32_t                 g_reset_flags;          /*!< RCC_CSR reset flags, read and cleared by the CM4 at every boot; the CM0+ prints them. */
 extern CoreState_t              g_core_state_cm0;       /*!< Heartbeat, checkpoint and promised wake of the CM0+; the CM4 watches it, the CM0+ prints the previous run's at BOOT. */
 extern CoreState_t              g_core_state_cm4;       /*!< The same for the CM4. */
+extern CoreSeen_t               g_core_seen_cm0;        /*!< The CM4 writes its last overdue verdict on the CM0+; the CM0+ prints it at its next BOOT. */
+extern CoreSeen_t               g_core_seen_cm4;        /*!< The CM0+ writes its last overdue verdict on the CM4; the CM4 prints it at its next BOOT: the report of a CM4 that cannot print. */
 #if defined(BENCH_FAULT_CM4) || defined(BENCH_FAULT_CM0) || defined(BENCH_LOOP_CM4) || defined(BENCH_LOOP_CM0) || defined(BENCH_SKIP_ALARM)
 extern uint32_t                 g_bench_fault_gate[2];  /*!< Build Override test only: [0] CM0+, [1] CM4 forced a fault, a loop or a lost wake, so the restart does not force it again. */
 #endif

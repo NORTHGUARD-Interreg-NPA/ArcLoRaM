@@ -1,0 +1,33 @@
+# Purpose: acceptance. Issue #101, Test Record docs/test-tracker/101-core-stall.md.
+# Claim: a CM4 that stopped is reported as the CM4, seen by a CM0+ that was alive, not as a silent node.
+# Node 6 (a C2): its CM4 loops for ever in its main loop (BENCH_LOOP_CM4=32) 60 s after its boot, with no trace line
+# after it. The CM0+ keeps running; at its slot tasks it looks at the CM4, which promised a wake every 30 s, and writes
+# down that none was served. Bench resets the node at +7 min; the BOOT then prints, from RAM, the verdict of the CM0+:
+# CORE_STATE core=cm4 st=overdue by=cm0 alive=0, with the checkpoint the CM4 stopped at. The C3 (Node 1) must
+# report no overdue core.
+description = "A CM4 stuck in its main loop is reported at the next BOOT as seen by the live CM0+"
+timeout = "10m"
+
+[nodes]
+1 = "C3"
+6 = "C2"
+
+[overrides]
+BENCH_LOOP_CM4 = "32"
+BENCH_FAULT_NODE = "6"
+BENCH_FAULT_AFTER_S = "60"
+
+[[action]]
+reset = 6
+at = "+7m"
+
+[[expect]]
+node = 6
+event = "CORE_STATE"
+where = { core = "cm4", st = "overdue", by = "cm0", step = "loop", alive = "0", crash = "0" }
+within = "9m"
+
+[[forbid]]
+node = 1
+event = "CORE_STATE"
+where = { st = "overdue" }
