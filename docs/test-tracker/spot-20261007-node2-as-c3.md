@@ -85,19 +85,23 @@ Neither Pi was power-cycled today; after a power-up run `bench reset <Node ID>` 
 
 The host does not stay on for 12 h.
 `bench flash` arms the boards, the host may then be switched off, the Pi Nodes keep running and the log collector keeps the record.
-The verdict is decided later, at any time and any number of times, by `tools/bench/src/bench/collector.py`: it writes the collector's lines as capture files under `tools/arclog/runs/<start>-<build>-collector/` and decides the scenario with the expect file `bench run` would build from it (`expect_spec`, arclog's engine).
+The verdict is decided later, at any time and any number of times, by `tools/bench/src/bench/collector.py`: it pulls the collector's lines into a run folder under `tools/arclog/runs/` (paged, append-only: `bench.pull`, #111 "Collector export and judge for days-long runs of 5 to 10 nodes") and decides the scenario from the folder with the expect file `bench run` would build from it (`expect_spec`, arclog's engine).
+The first judge (before #111) asked the collector once for the whole run, which is why the 18 h run needed `limit=1000000` by hand; the command below is the one of #111, into a new folder.
 
 ```sh
 BENCH_COLLECTOR_URL=<base URL of the collector> uv run --project tools/bench python -I -m bench.collector \
   tools/bench/scenarios/sync-dev-soak-swapped.toml --build e34092f-o954ffd --since 2026-10-07T14:06:55Z \
-  --node 2=nuna-node-03 --node 5=nuna-node-01 --dir tools/arclog/runs/20261007T140655Z-e34092f-o954ffd-collector
+  --node 2=nuna-node-03 --node 5=nuna-node-01 --dir tools/arclog/runs/20261007T140655Z-e34092f-o954ffd-pulled
 ```
 
 - Exit 0 is a PASS, 1 a FAIL, 2 no verdict yet (nothing failed so far). It prints, per node, the lines, the last line and its age, the `BOOT`s and the `SLOT` count per hour.
-- Run it from a checkout at or before `f71773e` (the worktree `.claude/worktrees/node2-c3-swap`), not from a `main` that contains #36 "Rx guard from the drift estimate".
-  The judge reads the trace with the arclog schema of the checkout it runs in, and since #36 that schema requires `g` and `win` on `RX_WIN`; this build (`e34092f-o954ffd`) predates them and does not print them.
-  From such a `main` it reports `FAIL nuna-node-01 RX_WIN: missing g,win` at +134 s although nothing is wrong with the run (seen on 2026-10-08).
-  From the worktree, the same command at 22:22 UTC on 2026-10-07 gave every stage ok up to 1350 `SLOT` on both nodes and exit 2.
+- Before #111 it had to run from a checkout at or before `f71773e` (the worktree `.claude/worktrees/node2-c3-swap`), not from a `main` that contains #36 "Rx guard from the drift estimate".
+  The judge read the trace with the arclog schema of the checkout it ran in, and since #36 that schema requires `g` and `win` on `RX_WIN`; this build (`e34092f-o954ffd`) predates them and does not print them.
+  From such a `main` it reported `FAIL nuna-node-01 RX_WIN: missing g,win` at +134 s although nothing was wrong with the run (seen on 2026-10-08).
+  Since #111 the pull keeps the schema of the build's commit in the run folder and the judge uses it, so any checkout judges this run (the record line says `schema commit e34092f`).
+- Re-judged on 2026-10-08 12:23 UTC by the pull and the judge of #111, from the collector alone (no host capture), into `tools/arclog/runs/20261007T140655Z-e34092f-o954ffd-pulled/`: PASS at +36115.2 s, `SLOT (1800/1800)` on both nodes (Node 2 at +36095.2 s, Node 5 at +36115.2 s), the C2 `CLK to=WARM` at +155.5 s, in 6 s and four lines of summary.
+  The pulled lines are those of the hand-rebuilt record (`...-collector/`): none of its lines is missing, and the pull holds 6 (Node 2) and 16 (Node 5) more at the end, from 08:43:31 to 08:45 UTC.
+  Without `--until` the judge also reads the reflash of both nodes at 08:51 UTC (build `77adecb-o954ffd`) and says so in four `WARN` lines; `--until 2026-10-08T08:45:00Z` ends the run before it.
 - The collector writes each line's time in ISO 8601 with its offset (its first version wrote the Pi's local time, which `--pi-tz` still converts). The tool flags a Pi whose clock is not NTP-synchronised or lags the collector's by more than 5 s, and a node the collector has not heard from for over 10 min.
 - Since 2026-10-07 13:51Z the Pi buffers its lines and replays them to a collector that reconnects, so a collector restart is no longer invalid by itself: a FAIL on lost lines says whether the buffer was enough.
 - A FAIL on a `SLOT` stage is a node that stopped: read its Pi's `journalctl -u openocd` around the last line before anything resets it (criterion 2), then `bench reset <Node ID>`.
