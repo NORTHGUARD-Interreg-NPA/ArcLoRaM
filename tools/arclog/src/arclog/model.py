@@ -206,9 +206,14 @@ def parse_capture_line(text: str, node: str = "", lineno: int = 0) -> Line:
     return parse_line(text, node=node, lineno=lineno)
 
 
+_DAY_SUFFIX_RE = re.compile(r"^(.+)-\d{8}$")
+
+
 def node_from_path(path: Path) -> str:
-    """Node name from a capture file name: 'c3-20260925.log' -> 'c3'."""
-    return path.stem.split("-", 1)[0]
+    """Node name from a capture file name: 'c3-20260925.log' -> 'c3', 'nuna-node-04-20261012.log' ->
+    'nuna-node-04' (the UTC day is cut off; a name with no day stops at its first dash)."""
+    m = _DAY_SUFFIX_RE.match(path.stem)
+    return m[1] if m else path.stem.split("-", 1)[0]
 
 
 def read_lines(path: str | Path, node: str | None = None) -> Iterator[Line]:

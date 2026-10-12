@@ -102,3 +102,15 @@ def test_a_valid_line_cut_by_a_reset_gives_the_new_boot_line():
     ln = parse_line("000000T000000.9997 4X M #02 CORE_SYNC stage=cm\ufffd"
                     "000000T000000.9997 4S A #00 BOOT build=66a35a2-d67ece1")
     assert (ln.core, ln.event, ln.seq, ln.fields) == ("4", "BOOT", 0, {"build": "66a35a2-d67ece1"})
+
+
+def test_a_node_name_with_dashes_is_kept_whole_and_the_day_is_cut_off():
+    from pathlib import Path
+
+    from arclog.model import node_from_path
+
+    assert node_from_path(Path("runs/nuna-node-04-20261012.log")) == "nuna-node-04"
+    assert node_from_path(Path("com10-20261004.log")) == "com10"
+    assert node_from_path(Path("c3-20261004.log")) == "c3"
+    assert node_from_path(Path("c3.log")) == "c3"
+    assert node_from_path(Path("c3-run1.log")) == "c3"          # no day: the old rule, up to the first dash
