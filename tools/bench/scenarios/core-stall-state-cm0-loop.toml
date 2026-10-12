@@ -1,0 +1,39 @@
+# Purpose: acceptance. Issue #101, Test Record docs/test-tracker/101-core-stall.md.
+# Claim: a CM0+ stuck at a checkpoint is reported by the CM4 while it runs, and by its own next BOOT.
+# Node 6 (a C2) loops for ever at the first pass of the checkpoint rx_set (about to set the radio to Rx) after
+# 60 s from its boot (BENCH_LOOP_CM0=4); on the DEV Sync profile it first locks up to 200 s after its boot. Its heartbeat stops. The CM4 looks at the CM0+ every 30 s and, once the silence is past
+# the wake the CM0+ promised plus 5 s, prints CORE_STATE st=overdue naming the checkpoint. Bench resets the node
+# at +7 min and its next BOOT prints the state the previous run left, st=boot, with the same checkpoint.
+# Node 1 (the C3) is not touched and must not report its CM0+ overdue.
+description = "A CM0+ looping at rx_set is reported overdue by the CM4, and at the next BOOT"
+timeout = "10m"
+
+[nodes]
+1 = "C3"
+6 = "C2"
+
+[overrides]
+BENCH_LOOP_CM0 = "4"
+BENCH_FAULT_NODE = "6"
+BENCH_FAULT_AFTER_S = "60"
+
+[[action]]
+reset = 6
+at = "+7m"
+
+[[expect]]
+node = 6
+event = "CORE_STATE"
+where = { core = "cm0", st = "overdue", cp = "rx_set", step = "rx_set", alive = "0" }
+within = "6m"
+
+[[expect]]
+node = 6
+event = "CORE_STATE"
+where = { core = "cm0", st = "boot", cp = "rx_set", step = "rx_set" }
+within = "8m"
+
+[[forbid]]
+node = 1
+event = "CORE_STATE"
+where = { st = "overdue" }

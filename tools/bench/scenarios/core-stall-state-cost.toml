@@ -1,0 +1,30 @@
+# Purpose: performance. Issue #101, Test Record docs/test-tracker/101-core-stall.md.
+# Claim (a measurement, not a verdict): what a checkpoint, a heartbeat and the promise of a wake cost on the CM0+,
+# measured at boot with timing-probe (BENCH_PROBE=1). The run ends with a reset at +4 min whose BOOT prints the
+# checkpoints counted in those 4 minutes (st=boot seq=), to put the cost against a slot.
+description = "Cost of the liveness record on the CM0+"
+timeout = "6m"
+
+[nodes]
+1 = "C3"
+6 = "C2"
+
+[overrides]
+BENCH_PROBE = "1"
+
+[[action]]
+reset = 6
+at = "+4m"
+
+[[expect]]
+node = 6
+event = "PROBE"
+where = { tag = "core_state" }
+count = 6
+within = "2m"
+
+[[expect]]
+node = 6
+event = "CORE_STATE"
+where = { core = "cm0", st = "boot" }
+within = "5m"
