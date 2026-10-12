@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Callable
 
 from arclog.expect import DirFollower, Run, replay, spec_from_dict
 from arclog.marks import Mark, format_mark, read_marks
@@ -145,7 +146,8 @@ def _boots(record: Path, nodes: list[str], since: datetime) -> dict[str, list[st
 
 def conclude(out_dir: Path, capture_dir: Path, scenario_text: str, s: Scenario, build_id: str, outcome: RunOutcome,
              boards: dict[int, Board], others: list[Board], manifest: dict, host_end: Host,
-             pi_clocks: dict[str, tuple[dict, dict]]) -> Assessment:
+             pi_clocks: dict[str, tuple[dict, dict]],
+             links: Callable[[Path], list[str]] | None = None) -> Assessment:
     """The end of `bench run`: keep the capture and the marks of the window, complete the manifest, judge the
     record exactly as `bench validate` will, and write the report. Returns the assessment (its code is the
     run's exit code)."""
@@ -162,5 +164,5 @@ def conclude(out_dir: Path, capture_dir: Path, scenario_text: str, s: Scenario, 
     manifest["validity"] = validity_table(a)
     (out_dir / "manifest.toml").write_text(dumps(manifest), encoding="utf-8")
     write_record(out_dir, scenario_text, s, build_id, outcome, boards, others, validity=format_validity(a),
-                 invalid=bool(invalidating(a.causes, a.dataset)))
+                 invalid=bool(invalidating(a.causes, a.dataset)), links=links(out_dir) if links else None)
     return a

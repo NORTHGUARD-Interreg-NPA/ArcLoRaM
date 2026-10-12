@@ -461,6 +461,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     from bench.capture import Capture
     from bench.flash import discover, flash_nodes, select
     from bench.collector import pi_clock_states
+    from bench.links import run_links
     from bench.manifest import dumps, read_host, start_manifest
     from bench.programmer import ProgrammerError, Refused
     from bench.run import follow, run_dir
@@ -523,7 +524,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         clocks_end = pi_clock_states(collector_url, pi_nodes)
         clocks = {name: (clocks_start[name], clocks_end.get(name, {})) for name in clocks_start}
         assessment = conclude(out, capture_dir, text, s, result.build_id, outcome, boards, others, manifest,
-                              read_host(), clocks)
+                              read_host(), clocks, links=lambda folder: run_links(folder, boards, s.overrides, repo))
         print(outcome.verdict)
         for line in format_validity(assessment):
             print(line)

@@ -326,3 +326,13 @@ def test_an_invalid_range_in_a_scenario_says_what_is_wrong():
     with pytest.raises(ValueError, match=r"expect\[0\]\.where\.err: min 2 is above max 1"):
         from_dict({"nodes": {"2": "C2"},
                    "expect": [{"event": "SYNC_RX", "where": {"err": {"min": 2, "max": 1}}}]})
+
+
+def test_the_report_has_a_links_section_when_there_are_links_and_none_when_there_are_not(tmp_path):
+    s = from_dict({"nodes": {"2": "C2"}})
+    outcome = RunOutcome(0, "PASS every expectation met", ["PASS +30.0s"], {}, T0, T0 + timedelta(seconds=30))
+    with_links = write_record(tmp_path / "a", "[nodes]\n2 = \"C2\"\n", s, "b1", outcome, {2: BOARDS[2]}, [],
+                              links=["| a -> b | 3 of 4 |", "", "- a note"]).read_text()
+    assert "## Links\n\n| a -> b | 3 of 4 |" in with_links
+    without = write_record(tmp_path / "b", "[nodes]\n2 = \"C2\"\n", s, "b1", outcome, {2: BOARDS[2]}, []).read_text()
+    assert "## Links" not in without

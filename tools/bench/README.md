@@ -449,6 +449,14 @@ From the places come the distance of every link between boards that stand in dif
 `bench boards` and `bench map` show each board's place and the expected links; a position whose UID is not in `node_id.c` is named (a typo, or a board never onboarded), and so is a board with a UID that is not in `node_id.c` (it boots with `id=0`).
 With no positions file, they say nothing about places.
 
+### The Links table of a run report
+
+A run whose boards sent Sync packets ends its `report.md` with a **Links** table: for each direction between two boards (a C3 never listens, so none ends at one), how many packets were heard of how many sent, their RSSI and SNR (min / median / max) and the **SNR margin** to the SF12 limit of -20 dB, the worst packet first.
+Next to it, when both boards have a place: the distance, the RSSI and SNR the link should give in free space at the run's channel and power (a ceiling: no wall, no antenna gain), and the loss the place costs on top of free space.
+Below 0 dB SNR the signal is under the noise and the RSSI is mostly noise, so the SNR margin is the one that counts; the signal is then estimated as RSSI + SNR.
+A locked C2 listens for the packets it expects, not for every one the C3 sends, so "heard of sent" is a loss figure only for a receiver that listens all the time (cold, scanning or acquiring).
+The same table can be made from any record folder: `bench.links.run_links`.
+
 ## Remote boards (Pi Nodes)
 
 A board wired to a Raspberry Pi (`github.com/Nuna-Systems/Pi-node`: OpenOCD for SWD over the Pi's GPIO header, the UART as a TCP log server, both on the tailnet) is a Board like any other.
