@@ -93,6 +93,39 @@ void test_power_at_limit_is_granted(void)
         ComplianceEngine_RequestChannel(FREQ_868_HZ, 100u, MAX_POWER_DBM));
 }
 
+/* ------- the 10 % / 500 mW sub-band (ETSI sub-band P, 869.4 - 869.65 MHz) ------------------ */
+
+#define FREQ_869_5_HZ   869500000u
+/* Max credit for 10 % DC over 1 h = 360 000 ms */
+#define MAX_CREDIT_P_MS 360000u
+
+void test_the_high_power_channel_grants_the_maximum_power_of_the_board(void)
+{
+    TEST_ASSERT_EQUAL(COMPLIANCE_GRANTED, ComplianceEngine_RequestChannel(FREQ_869_5_HZ, 1000u, 22));
+}
+
+void test_the_same_power_is_refused_on_the_one_percent_channels(void)
+{
+    TEST_ASSERT_EQUAL(COMPLIANCE_POWER_TOO_HIGH, ComplianceEngine_RequestChannel(FREQ_868_HZ, 1000u, 22));
+    TEST_ASSERT_EQUAL(COMPLIANCE_POWER_TOO_HIGH, ComplianceEngine_RequestChannel(868300000u, 1000u, 15));
+}
+
+void test_the_high_power_channel_stops_at_500_mw(void)
+{
+    TEST_ASSERT_EQUAL(COMPLIANCE_GRANTED, ComplianceEngine_RequestChannel(FREQ_869_5_HZ, 1000u, 27));
+    TEST_ASSERT_EQUAL(COMPLIANCE_POWER_TOO_HIGH, ComplianceEngine_RequestChannel(FREQ_869_5_HZ, 1000u, 28));
+}
+
+void test_the_high_power_channel_has_ten_percent_of_duty_cycle_of_its_own(void)
+{
+    /* 360 s of credit an hour; a deficit of 1 000 ms waits ceil(1000 x 1000 / 100) = 10 000 ms. */
+    TEST_ASSERT_EQUAL(COMPLIANCE_GRANTED, ComplianceEngine_RequestChannel(FREQ_869_5_HZ, MAX_CREDIT_P_MS, 22));
+    TEST_ASSERT_EQUAL(COMPLIANCE_RESTRICTED, ComplianceEngine_RequestChannel(FREQ_869_5_HZ, 1000u, 22));
+    TEST_ASSERT_EQUAL(10000u, s_status.wait_ms);
+    /* The one percent band keeps its own credit. */
+    TEST_ASSERT_EQUAL(COMPLIANCE_GRANTED, ComplianceEngine_RequestChannel(FREQ_868_HZ, MAX_CREDIT_MS, 14));
+}
+
 /* ------- BAND_UNKNOWN ----------------------------------------------------- */
 
 void test_band_unknown_returns_correct_result(void)
@@ -192,6 +225,10 @@ int main(void)
     RUN_TEST(test_restricted_wait_ms_reflects_duty_cycle);
     RUN_TEST(test_power_too_high);
     RUN_TEST(test_power_at_limit_is_granted);
+    RUN_TEST(test_the_high_power_channel_grants_the_maximum_power_of_the_board);
+    RUN_TEST(test_the_same_power_is_refused_on_the_one_percent_channels);
+    RUN_TEST(test_the_high_power_channel_stops_at_500_mw);
+    RUN_TEST(test_the_high_power_channel_has_ten_percent_of_duty_cycle_of_its_own);
     RUN_TEST(test_band_unknown_returns_correct_result);
     RUN_TEST(test_band_unknown_increments_count);
     RUN_TEST(test_status_updated_on_granted);

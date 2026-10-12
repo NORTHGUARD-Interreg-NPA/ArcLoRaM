@@ -26,6 +26,7 @@
 #include <stdbool.h>
 #include "protocol_types.h"
 #include "guard_time_resolver.h"
+#include "channel_plan.h"      /* RADIO_TX_POWER_DBM */
 
 /* =========================================================================
  * Constants
@@ -35,10 +36,13 @@
 /*!
  * TX power passed to \ref ComplianceEngine_RequestChannel on every TX slot.
  *
- * \remark Must not exceed the band's \c max_tx_power_dbm (14 dBm for the
- *         ETSI 868 MHz ISM profile). Full TX power management is deferred. Should probably lie inside the MAC State Machine eventually, but for now this is a convenient global constant.
+ * \remark It is the power the radio is set to (\ref RADIO_TX_POWER_DBM, 14 dBm
+ *         unless a Build Override raises it on the 869.5 MHz channel), so the engine
+ *         judges what is really transmitted: it must not exceed the band's
+ *         \c max_tx_power_dbm (14 dBm in 865 - 868.6 MHz, 27 dBm in 869.4 - 869.65 MHz).
+ *         Full TX power management is deferred. Should probably lie inside the MAC State Machine eventually, but for now this is a convenient global constant.
  */
-#define TX_POWER_DBM  0
+#define TX_POWER_DBM  RADIO_TX_POWER_DBM
 #endif
 
 #ifndef TX_LEAD_MS
