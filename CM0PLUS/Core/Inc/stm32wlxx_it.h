@@ -55,7 +55,10 @@ void RTC_LSECSS_IRQHandler(void);
 void IPCC_C2_RX_C2_TX_IRQHandler(void);
 void SUBGHZ_Radio_IRQHandler(void);
 /* USER CODE BEGIN EFP */
-
+/* Naked: the compiler adds no prologue, so the frame the hardware stacked is at the stack
+ * pointer on entry (Common/Log/core_fault.h, #101). */
+void NMI_Handler(void) __attribute__((naked));
+void HardFault_Handler(void) __attribute__((naked));
 /* USER CODE END EFP */
 
 #ifdef __cplusplus

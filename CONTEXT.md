@@ -1377,6 +1377,8 @@ sleep gaps (hours), CM4 hangs go undetected until the next MbMux event fires.
 This is acceptable for multi-year field deployments where a few-hour detection
 window is tolerable.
 
+Today nothing increments the counter (`g_cm4_heartbeat` is only declared and zeroed): it read 0 on the CM4 that locked up in silence event 4, which therefore says nothing about that CM4 (issue #101).
+
 The hardware IWDG is **not used in production**. LSI is not enabled. Rationale:
 IWDG maximum timeout (~32 s) is incompatible with hour-long inter-Phase sleep
 gaps — satisfying it requires periodic sub-alarms that cost more energy than the
@@ -1424,6 +1426,23 @@ Rx timing events: `SCAN` (alarm chain stopped, Scanning Rx starts, `why=boot|los
 Sync packets are matched across nodes by `(ep, ph, ce)`, which both sender and receiver log.
 The event table, host capture, viewer, merge and sync report live in `tools/arclog/` (see its README); a test there fails when the firmware's `ARCLOG()` calls and the tool's schema disagree.
 See ADR-0014.
+
+### Crash Record
+What a core's fault handler leaves in RAM that a reset does not clear, so that the next `BOOT` (or a debugger) can say where and why the core stopped (`Common/Log/core_crash.h`, issue #101).
+One per core, in the shared region at the same address for both cores (`g_core_crash_cm0`, `g_core_crash_cm4`), which `SharedMem_Init` does not zero.
+It holds the frame the hardware stacked (r0-r3, r12, lr, pc, xpsr), the stack pointer before the exception, EXC_RETURN, eight words of stack above the frame, and on the CM4 the fault status registers (CFSR, HFSR, MMFAR, BFAR, ICSR, SHCSR).
+The CM0+ is a Cortex-M0+ with no fault status registers: its record is the frame alone, and its report says `why=na`.
+The first fault wins: a second one while the record is valid only counts itself.
+The owner reports it at its next `BOOT` as `CORE_CRASH`, `CORE_CRASH_SCB`, `CORE_CRASH_REGS` and `CORE_CRASH_STK`, then clears it.
+The CM4 enables its BusFault, UsageFault and MemManage handlers, so that a fault is named (`why=ibuserr`) instead of arriving as a forced HardFault.
+A lockup (a fault while a fault is being taken, as in silence events 3 and 4) takes no handler and leaves no record: a stall with no record is itself evidence.
+_Avoid_: core dump, post-mortem (the post-mortem is the reading of a halted core from outside, #67)
+
+### Reset Cause
+Why the MCU last reset, in the `BOOT` line of both cores (`rst=` and the raw flags `rsf=`): `power` (power-up or brown-out, which the flag cannot tell apart), `pin`, `soft`, `iwdg`, `wwdg`, `lpwr`, `obl`, or `none`.
+The CM4 reads `RCC_CSR` first thing after any reset, keeps the flags in the shared region for the CM0+, and clears them, so both cores print the same cause (`Common/Log/reset_cause.h`, issue #101).
+The pin flag accompanies the other resets, so the decoder picks the most telling flag, not the first one set.
+_Avoid_: boot reason, reset reason
 
 ---
 

@@ -147,7 +147,7 @@ event = "TX_LATE"
 ```
 
 A flashed node is armed when both cores have logged `BOOT` with the expected Build ID; lines of the old image before that are ignored, and a `BOOT` of another build before arming is waited through.
-The Smoke Check is always on (`smoke = false` to disable): within `smoke_window` (30 s) each flashed node is armed and its CM4 logs `CORE_SYNC stage=linked`.
+The Smoke Check is always on (`smoke = false` to disable): within `smoke_window` (30 s) of the end of its own flash (boards are flashed one after the other) each flashed node is armed and its CM4 logs `CORE_SYNC stage=linked`.
 From its first `BOOT` on, a node fails the run on lost lines, a schema problem, an unexpected reboot, a CM0+ rebooting alone, a forbidden event, or a `BOOT` of another build.
 A run passes once every expectation is met and `min_duration` (default: the smoke window) has elapsed.
 The full format is in `src/arclog/expect.py`.
