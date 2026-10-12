@@ -44,6 +44,7 @@ After that one hand flash, bench does everything.
 - [x] A reflash and a `bench reset <Node ID>` work on the board the run left asleep.
 
 Ticked on Node 6 (nuna-node-08), run `2026-10-10 15:26`; every further board adds its rows to Runs.
+Nodes 4 (nuna-node-04), 1 (nuna-node-06) and 7 (nuna-node-09) pass the scenario too, on 2026-10-12 (Node 7 after its Pi was restarted, see the fleet check at the end).
 
 Not covered, by design: that the board's radio receives.
 That needs a second board on the bench as the sender (for example `c3-c2-sync.toml` with the new board as the C2).
@@ -61,3 +62,33 @@ That needs a second board on the bench as the sender (for example `c3-c2-sync.to
 | 2026-10-10 15:33 | `bench flash --node 6=C3`, then `bench reset 6` | `d53cb73-d1c446b` | PASS | `tools/arclog/runs/bench/nuna-node-08-20261010.log` | Reflash and reset of Node 6 about a minute after the PASS run left it running: boot check PASS (both cores, +19 s), then the reset rebooted it (`BOOT cls=C3 id=6` at 15:33:19 for the flash and 15:33:47 for the reset). |
 | 2026-10-10 15:43 | `bench flash --node 1=C3`, then `bench reset 1` | `d53cb73-d1c446b` | PASS | `tools/arclog/runs/bench/nuna-node-06-20261010.log` | Node 1 on nuna-node-06 again after the FAIL row above: boot check PASS (both cores, +18 s) and a reset (`BOOT cls=C3 id=1` at 15:43:39 for the flash and 15:43:53 for the reset). The board that had been silent for 22 minutes runs again. |
 | 2026-10-10 16:04 | `bench flash --node 8=C3`, then `bench reset 8` | `d53cb73-d6922bf` | PASS | `tools/arclog/runs/bench/com15-20261010.log` | The new board flashed by hand-free command on the local ST-LINK (no Pi wires on it), before it goes to a Pi: boot check PASS (both cores, +5 s), reset rebooted it (`BOOT cls=C3 id=8` at 16:04:47 and 16:05:15). Not an onboarding run: it has not been on a Pi yet. |
+| 2026-10-12 10:48 | `onboard.toml --as 7` | `3fd1ec7-da86ca4` | FAIL to start (flash refused by the Pi) | `tools/arclog/runs/bench/nuna-node-09-20261012.log` (no run record: the flash never started) | Node 7 on nuna-node-09. The build was fine. `bench run` stopped at the flash: `nuna-node-09:3333: Remote communication error. Target disconnected`. OpenOCD on that Pi rejected the GDB attach (`[stm32wlx.cpu0] not examined`, `gdb-attach failed`, `Connect failed`). The board was not touched and kept running (`SLOT`, `STOP2_WAKES` in the capture). Not a verdict on the firmware: see the fleet check below. |
+| 2026-10-12 10:51 | `onboard.toml --as 4` | `3fd1ec7-da86ca4` | PASS | `tools/arclog/runs/20261012T105100Z-3fd1ec7-da86ca4/` | Node 4 on nuna-node-04. Flash and both-core boot +18.5 s; `TX_DONE` after each boot (+19.5 s, +172.9 s, +322.8 s); `STOP2_WAKES` at +128.5 s and +279.9 s; resets at +150 s and +5 min each rebooted both cores (+171.7 s, +321.7 s). No unplanned reboot, no lost line. First clean PASS of Node 4. |
+| 2026-10-12 10:56 | `onboard.toml --as 1` | `3fd1ec7-da86ca4` | PASS | `tools/arclog/runs/20261012T105658Z-3fd1ec7-da86ca4/` | Node 1 on nuna-node-06. Flash and both-core boot +18.5 s; `TX_DONE` at +19.4 s, +173.4 s, +323.3 s; `STOP2_WAKES` at +118.5 s and +280.3 s; resets rebooted both cores (+172.2 s, +322.1 s). No unplanned reboot, no lost line. First clean PASS of Node 1 (the 2026-10-10 FAIL row was a NUL byte in a BOOT line). |
+| 2026-10-12 11:03 | `onboard.toml --as 6` | `3fd1ec7-da86ca4` | PASS | `tools/arclog/runs/20261012T110328Z-3fd1ec7-da86ca4/` | Node 6 on nuna-node-08, a repeat of the 2026-10-10 PASS on a new Build ID. `TX_DONE` at +19.9 s, +173.2 s, +323.5 s; `STOP2_WAKES` at +124.9 s and +280.2 s; resets rebooted both cores (+172.1 s, +322.3 s). No unplanned reboot, no lost line. |
+| 2026-10-12 11:09 | `bench reset 7` | n/a | FAIL (Pi refused the GDB attach) | `tools/arclog/runs/bench/nuna-node-09-20261012.log` | Retry of the guarded reset on Node 7 after the other three runs: `Remote connection closed`, and OpenOCD logged the same `not examined` / `gdb-attach failed`. The refusal is persistent, not a single bad attach. |
+| 2026-10-12 11:15 | `onboard.toml --as 7` | `3fd1ec7-da86ca4` | PASS | `tools/arclog/runs/20261012T111542Z-3fd1ec7-da86ca4/` | Node 7 on nuna-node-09, after Simon restarted that Pi (the board power-cycled with it, and its OpenOCD journal was clean: 26 startup lines, 0 errors). Flash and both-core boot +20.6 s; `TX_DONE` at +21.6 s, +175.4 s, +325.5 s; `STOP2_WAKES` at +128.6 s and +278.5 s; resets rebooted both cores (+174.3 s, +324.4 s). No unplanned reboot, no lost line. The only OpenOCD errors in the capture are `[stm32wlx.cpu1] Debug AP not available, will not halt after reset!`, twice (flash and reset), the same line each healthy Pi logged once at its flash. First PASS of Node 7. |
+
+## Fleet check, 2026-10-12
+
+Purpose: spontaneous. Simon asked for the four Pi Nodes on the bench to be tested end to end.
+
+| Pi Node | Node ID | SSH | openocd and uart-log services | OpenOCD journal | Onboarding run |
+|---|---|---|---|---|---|
+| nuna-node-04 | 4 | ok | active, 0 restarts | no error | PASS |
+| nuna-node-06 | 1 | ok | active, 0 restarts | no error | PASS |
+| nuna-node-08 | 6 | ok | active, 0 restarts | no error | PASS |
+| nuna-node-09 | 7 | ok | active, 0 restarts | about 30 errors a minute, in the journal from its first line (05:59 UTC) | flash and reset refused; PASS after Simon restarted the Pi (see below) |
+
+All four Pis: tailnet ping ok, uptime about 1.8 days, NTP synced, 34 to 38 degrees C, no throttling, GPIO18 idle high (not held in reset), the same `/etc/openocd/rpi-swd.cfg`.
+The Pis' journals are volatile, so the start of the nuna-node-09 error loop is not known.
+The capture of 2026-10-10 shows one OpenOCD error in its last hour (to 16:14 UTC), so the loop started after that.
+
+Finding: on nuna-node-09, OpenOCD never examines the CM4 (`Failed to read memory at 0xe000ef40`, `[stm32wlx.cpu0] Examination failed`, `Polling failed, trying to reexamine`), so it rejects every GDB attach.
+SWD itself answers (`SWD DPIDR 0x6ba02477`), and the board runs (UART log flows, `STOP2_WAKES` counting), so the log works and remote flash and reset do not.
+Nothing was changed on that Pi by the agent.
+Simon then restarted the Pi (11:12 UTC, the board power-cycled with it): OpenOCD started clean (0 errors), and the onboarding run passed at 11:15 (Runs table).
+The cause of the examination failure is not known, and nothing says it cannot come back: the first sign is `Examination failed` in the Pi's OpenOCD journal or in its `[openocd]` lines in the capture.
+Until then a power-cycle of the Pi is the known remedy.
+
+Not covered: a read of both cores' liveness through OpenOCD (for example `g_stop2_count` twice), which needs a GDB session outside bench.
