@@ -60,7 +60,7 @@ from typing import Callable
 
 from arclog.health import SeqTracker
 from arclog.model import Kind, Line, format_host_time, parse_capture_line
-from arclog.schema import validate
+from arclog.schema import Event, validate
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -292,6 +292,17 @@ class Failure:
 
 
 @dataclass
+class _Group:
+    """Expectations that count the same lines (same event, node and conditions), at different thresholds: a soak
+    asks for 150 slots in the first hour, 300 in the second, and so on, and one counter serves them all."""
+
+    match: Match
+    members: list[int] = field(default_factory=list)   # indices into spec.expects, by threshold
+    seen: int = 0                                      # lines counted
+    done: int = 0                                      # members whose threshold is reached
+
+
+@dataclass
 class _NodeState:
     spec: NodeSpec
     booted: bool = False            # first BOOT after since seen: checks are on
@@ -308,26 +319,59 @@ class Run:
     """Decides a run from lines (fed in time order per node) and clock ticks.
 
     The first failure is the verdict. With `keep_going` a failure only goes to `failures` and the lines keep
-    being read, so a caller can list every failure of a finished run.
+    being read, so a caller can list every failure of a finished run; past `max_failures` they are only counted
+    (`dropped`), so the list stays bounded on a run of days. `events` is the schema the lines are checked with,
+    when it is not this checkout's (the table of the build that wrote them). With `progress` off an expectation is
+    reported when it is met and not at each line that counts toward it, which on a run of days is most of the output.
+
+    The cost of a line does not grow with the number of staged expectations: those that count the same lines share
+    a counter, and the deadlines are walked in order.
     """
 
     def __init__(self, spec: Spec, since: datetime,
-                 report: Callable[[str], None] = lambda msg: None, keep_going: bool = False) -> None:
+                 report: Callable[[str], None] = lambda msg: None, keep_going: bool = False,
+                 events: dict[str, Event] | None = None, max_failures: int | None = None,
+                 progress: bool = True) -> None:
         self.spec = spec
         self.since = since
         self.report = report
         self.keep_going = keep_going
+        self.events = events
+        self.progress = progress
+        self.max_failures = max_failures
+        self.dropped = 0
         self.verdict: Verdict | None = None
         self.failures: list[Failure] = []
         self.armed_at: datetime | None = None
         self._nodes = {n: _NodeState(s) for n, s in spec.nodes.items()}
         self._seq = SeqTracker()
-        self._counts = [0] * len(spec.expects)
+        self._groups, self._lookup, self._owner = self._group_expectations()
+        self._unmet = len(spec.expects)
+        self._deadlines: list[tuple[datetime, int]] | None = None   # (when it is due, index), once armed
+        self._due = 0
         self._smoke_done = not spec.smoke
         if not any(s.flashed for s in spec.nodes.values()):
             self.armed_at = since
 
     # -- helpers ------------------------------------------------------------
+
+    def _group_expectations(self) -> tuple[list[_Group], dict[tuple[str, str | None], list[_Group]],
+                                           dict[int, _Group]]:
+        groups: dict[tuple, _Group] = {}
+        for i, e in enumerate(self.spec.expects):
+            key = (e.event, e.node, tuple(sorted(e.where.items(), key=lambda kv: kv[0])))
+            groups.setdefault(key, _Group(Match(e.event, e.node, e.where))).members.append(i)
+        lookup: dict[tuple[str, str | None], list[_Group]] = {}
+        owner: dict[int, _Group] = {}
+        for (event, node, _), group in groups.items():
+            group.members.sort(key=lambda i: (self.spec.expects[i].count, i))
+            lookup.setdefault((event, node), []).append(group)
+            owner.update({i: group for i in group.members})
+        return list(groups.values()), lookup, owner
+
+    def _count(self, i: int) -> int:
+        """How many lines count toward expectation `i`, up to what it needs."""
+        return min(self._owner[i].seen, self.spec.expects[i].count)
 
     def _at(self, t: datetime) -> str:
         return f"+{(t - self.since).total_seconds():.1f}s"
@@ -335,7 +379,10 @@ class Run:
     def _fail(self, reason: str, kind: str = "other", node: str | None = None,
               at: datetime | None = None) -> None:
         if self.verdict is None:
-            self.failures.append(Failure(reason, kind, node, at))
+            if self.max_failures is None or len(self.failures) < self.max_failures:
+                self.failures.append(Failure(reason, kind, node, at))
+            else:
+                self.dropped += 1
             if not self.keep_going:
                 self.verdict = Verdict(FAIL, reason)
             self.report(f"FAIL {reason}")
@@ -366,7 +413,7 @@ class Run:
             self._fail(f"{line.node} {lost} line(s) lost before core {line.core} #{line.seq:02x} "
                        f"{line.event} {self._at(t)}", "lost_lines", line.node, t)
             return
-        for problem in validate(line):
+        for problem in validate(line, self.events):
             self._fail(f"{line.node} {problem} {self._at(t)}")
             return
 
@@ -382,10 +429,25 @@ class Run:
                 return
         if not armed_before and st.spec.flashed:
             return  # expectations count once the run is armed
-        for i, e in enumerate(self.spec.expects):
-            if e.matches(line) and self._counts[i] < e.count:
-                self._counts[i] += 1
-                self.report(f"ok   {e.describe()} ({self._counts[i]}/{e.count}) {self._at(t)}")
+        said: list[tuple[int, str]] = []
+        for group in self._lookup.get((line.event, line.node), []) + self._lookup.get((line.event, None), []):
+            if group.match.matches(line):
+                self._counted(group, t, said)
+        for _, msg in sorted(said):  # in the order of the expect file, as when each counted on its own
+            self.report(msg)
+
+    def _counted(self, group: _Group, t: datetime, said: list[tuple[int, str]]) -> None:
+        group.seen += 1
+        expects = self.spec.expects
+        if self.progress:
+            said += [(i, f"ok   {expects[i].describe()} ({group.seen}/{expects[i].count}) {self._at(t)}")
+                     for i in group.members[group.done:]]
+        while group.done < len(group.members) and expects[group.members[group.done]].count <= group.seen:
+            i = group.members[group.done]
+            if not self.progress:
+                said.append((i, f"ok   {expects[i].describe()} ({group.seen}/{expects[i].count}) {self._at(t)}"))
+            group.done += 1
+            self._unmet -= 1
 
     def _boot(self, st: _NodeState, line: Line, t: datetime) -> None:
         name, core = line.node, line.core
@@ -457,8 +519,13 @@ class Run:
         return missing
 
     def _expects_missing(self) -> list[str]:
-        return [f"{e.describe()} ({self._counts[i]}/{e.count})"
-                for i, e in enumerate(self.spec.expects) if self._counts[i] < e.count]
+        return [f"{e.describe()} ({self._count(i)}/{e.count})"
+                for i, e in enumerate(self.spec.expects) if self._count(i) < e.count]
+
+    def pending(self) -> list[str]:
+        """What the run still waits for, as `<expectation> (<seen>/<needed>)`: the smoke check's missing
+        boots or link first, then the expectations not met yet."""
+        return (self._smoke_missing() if not self._smoke_done else []) + self._expects_missing()
 
     def tick(self, now: datetime) -> Verdict | None:
         """Advance the clock; returns the verdict once there is one."""
@@ -473,13 +540,22 @@ class Run:
                 self._fail("smoke check: " + "; ".join(missing))
                 return self.verdict
         if self.armed_at is not None:
-            for i, e in enumerate(self.spec.expects):
-                if (e.within is not None and self._counts[i] < e.count
-                        and now >= self.armed_at + e.within):
-                    self._fail(f"{e.describe()} not within {e.within.total_seconds():g}s of arming "
-                               f"({self._counts[i]}/{e.count})")
-                    return self.verdict
-        if (self._smoke_done and self.armed_at is not None and not self._expects_missing()
+            if self._deadlines is None:
+                self._deadlines = sorted((self.armed_at + e.within, i)
+                                         for i, e in enumerate(self.spec.expects) if e.within is not None)
+            late = []
+            while self._due < len(self._deadlines) and self._deadlines[self._due][0] <= now:
+                i = self._deadlines[self._due][1]
+                self._due += 1
+                if self._count(i) < self.spec.expects[i].count:
+                    late.append(i)
+            if late:
+                i = min(late)
+                e = self.spec.expects[i]
+                self._fail(f"{e.describe()} not within {e.within.total_seconds():g}s of arming "
+                           f"({self._count(i)}/{e.count})")
+                return self.verdict
+        if (self._smoke_done and self.armed_at is not None and self._unmet == 0
                 and now >= self.since + self.spec.hold):
             self.verdict = Verdict(PASS, "every expectation met")
             self.report(f"PASS {self._at(now)}")
@@ -499,6 +575,17 @@ class Run:
 # ---------------------------------------------------------------------------
 
 
+def capture_files(directory: str | Path, node: str, since: datetime) -> list[Path]:
+    """The daily capture files of a node (<node>-YYYYMMDD.log) from the day of `since` on, oldest first."""
+    first = since.strftime("%Y%m%d")
+    files = []
+    for p in Path(directory).glob(f"{node}-*.log"):
+        date = p.stem[len(node) + 1:]
+        if len(date) == 8 and date.isdigit() and date >= first:
+            files.append(p)
+    return sorted(files)
+
+
 class DirFollower:
     """Reads new lines of each node's daily capture files (<node>-YYYYMMDD.log).
 
@@ -514,13 +601,7 @@ class DirFollower:
         self._offsets: dict[Path, int] = {}
 
     def _files(self, node: str) -> list[Path]:
-        first = self.since.strftime("%Y%m%d")
-        files = []
-        for p in self.directory.glob(f"{node}-*.log"):
-            date = p.stem[len(node) + 1:]
-            if len(date) == 8 and date.isdigit() and date >= first:
-                files.append(p)
-        return sorted(files)
+        return capture_files(self.directory, node, self.since)
 
     def poll(self) -> list[Line]:
         """New complete lines at or after `since`, per node in file order."""

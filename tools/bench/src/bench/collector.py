@@ -1,90 +1,65 @@
-"""Decide a scenario from the log collector's lines, so a long run does not need the host.
+"""Decide a scenario from the log collector's record, so a long run does not need the host.
 
 The collector is a server that stores every Pi Node's UART log.
 `bench flash` arms the boards in a few minutes; the host can then be switched off, the collector keeps
-recording, and this module turns its lines into capture files and decides the scenario with the same
-engine and the same expect file as `bench run` (`expect_spec`, arclog's `Run`).
+recording, and this module decides the scenario from its lines with the same engine and the same expect file
+as `bench run` (`expect_spec`, arclog's `Run`).
 
     python -m bench.collector scenarios/x.toml --collector http://HOST:PORT --build ID \\
-        --since 2026-10-07T08:40:00Z --node 2=nuna-node-03 --node 5=nuna-node-01
+        --since 2026-10-07T08:40:00Z --node 2=nuna-node-03 --node 5=nuna-node-01 --dir tools/arclog/runs/<run>
+
+It does two things, each of which can be done alone. `bench.pull` copies the collector's lines into the run
+folder, paged and append-only (a second call adds only what is new); this module judges the folder, streaming it,
+so a record of days costs memory for the expectations and not for the run. `--no-pull` judges the folder as it is.
+
+What it prints is bounded: the verdict, one line per node, the first few causes. The stage-by-stage detail goes to
+`judge.log` in the folder (`--verbose` prints it too). An agent decides a run from the summary and never reads
+the record.
 
 Exit code: 0 pass, 1 fail, 2 no verdict yet (nothing failed so far, or the run timed out undecided),
-3 an invalid scenario or argument, 4 the record is invalid (a bench fault: see `collector_causes`).
-
-The collector writes each line's time in ISO 8601 with its offset; its first version wrote the Pi's local time
-without a zone (`2026-10-07 04:28:49.615240`), which `--pi-tz` still converts.
-A gap in the collector's stream (a restart, a dropped connection, more than the Pi buffered) shows as lost
-lines; with a reconnect after the start the run is invalid (exit 4), not a verdict on the firmware.
+3 an invalid scenario or argument, 4 the record is invalid: a bench fault (see `collector_causes`), or an
+export that is not whole (a pull that is not complete, a collector that no longer holds the start of the run).
+An unfit record is not judged: its verdict would be about the export and not about the nodes.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
+import statistics
 import sys
-import urllib.request
-from collections import Counter, defaultdict
-from datetime import datetime, timedelta, timezone, tzinfo
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-from arclog.expect import DirFollower, Run, parse_since, replay, spec_from_dict
+from arclog.expect import Run, parse_since, spec_from_dict
+from arclog.health import SeqTracker
 from arclog.model import Line, format_host_time
-from arclog.health import check
-from arclog.validity import Cause, exit_code, invalidating, silence_causes, trace_causes
+from arclog.schema import events_from_dict
+from arclog.stream import StreamStats, merged_lines
+from arclog.validity import Cause, SilenceWatch, TraceAudit, exit_code, invalidating
 
+from bench.pull import (SCHEMA, PullError, add_record_arguments, http_get, load_state, node_pairs, pull,
+                        schema_from_git)
 from bench.run import expect_spec
 from bench.scenario import Scenario, load
 
-# <time> | <node> | <device line>; the time is ISO 8601 with its offset (2026-10-07T16:03:58.648+02:00),
-# or, from the first version of the collector, the Pi's local time with no zone (2026-10-07 04:28:49.615).
-_LINE = re.compile(r"^(\d{4}-\d\d-\d\d)[ T](\d\d:\d\d:\d\d(?:\.\d+)?)(Z|[+-]\d\d:\d\d)? \| (\S+) \| (.*)$")
-# The Pi's own lines in the stream ("[pi] uart_idle=6s ntp=synced"): not trace lines.
-_PI_LINE = "[pi] "
-
-# "ok   nuna-node-03 SLOT (12/150) +215.4s": an expectation that counts, 12 of 150 so far.
-_PROGRESS = re.compile(r"^ok\s+\S+ \S+ \((\d+)/(\d+)\)")
-
+JUDGE_LOG = "judge.log"
 # The run is armed by the BOOTs after `bench flash`, minutes after `since`.
 SMOKE_WINDOW = "15m"
 # Clock offsets beyond this between a Pi and the collector shift every time of the run.
 CLOCK_SKEW_S = 5.0
 # A node that logs a slot every 20 s and has been quiet this long has stopped.
 SILENT_WARN_S = 600.0
-
-
-def convert_line(text: str, pi_tz: tzinfo) -> tuple[str, datetime, str] | None:
-    """(node, UTC time, device line) of one collector line, or None for a line of another shape
-    or one of the Pi's own."""
-    m = _LINE.match(text.rstrip("\r\n"))
-    if m is None:
-        return None
-    day, clock, offset, node, device = m.groups()
-    if device.startswith(_PI_LINE):
-        return None
-    when = datetime.fromisoformat(f"{day}T{clock}{'+00:00' if offset == 'Z' else offset or ''}")
-    if offset is None:
-        when = when.replace(tzinfo=pi_tz)
-    return node, when.astimezone(timezone.utc), device
-
-
-def write_capture(text: str, out_dir: Path, pi_tz: tzinfo) -> dict[str, int]:
-    """Write the collector's lines as capture files (<node>-YYYYMMDD.log, UTC days); lines per node."""
-    files: dict[tuple[str, str], list[str]] = defaultdict(list)
-    for raw in text.splitlines():
-        converted = convert_line(raw, pi_tz)
-        if converted is not None:
-            node, t, device = converted
-            files[(node, t.strftime("%Y%m%d"))].append(f"{format_host_time(t)}\t{device}\n")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    counts: Counter[str] = Counter()
-    for (node, day), lines in files.items():
-        (out_dir / f"{node}-{day}.log").write_text("".join(lines), encoding="utf-8")
-        counts[node] += len(lines)
-    return dict(counts)
+# The summary shows this many causes and says how many more the detail holds.
+MAX_SHOWN = 5
+# A gap in the sequence numbers this close after a chunk boundary of the pull is taken for the export's.
+BOUNDARY_S = 2.0
+# The summary keeps a verdict's reason to this long; the detail has it whole.
+CLIP = 300
 
 
 def node_number(name: str) -> int:
@@ -93,12 +68,6 @@ def node_number(name: str) -> int:
     if m is None:
         raise ValueError(f"{name!r} does not end with a node number")
     return int(m[1])
-
-
-def http_get(url: str, timeout: float = 120.0) -> str:
-    # The collector speaks plain http on the tailnet.
-    with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
-        return response.read().decode("utf-8", errors="replace")
 
 
 def pi_clock_states(base: str | None, names: list[str]) -> dict[str, dict]:
@@ -154,119 +123,261 @@ def collector_causes(names: list[str], status: dict, since: datetime, lost: dict
     return causes
 
 
-def _per_hour(lines: list[Line], event: str, since: datetime) -> list[int]:
-    hours = [ln for ln in lines if ln.event == event and ln.host_time is not None]
-    if not hours:
-        return []
-    last = int((max(ln.host_time for ln in hours) - since) / timedelta(hours=1))
-    counts = [0] * (last + 1)
-    for ln in hours:
-        counts[max(0, int((ln.host_time - since) / timedelta(hours=1)))] += 1
-    return counts
+def export_causes(names: list[str], nodes: dict) -> list[Cause]:
+    """What makes the pulled folder not a whole record of the run: a node that was not pulled, a pull that did not
+    finish, a collector that no longer held the start of the run or that started its storage over.
 
-
-def describe_nodes(names: list[str], lines: list[Line], since: datetime, now: datetime) -> list[str]:
-    out = []
+    These say nothing about the firmware, and a verdict on such a record would be a verdict on the export (a
+    missing `BOOT` is not a node that did not boot), so the folder is not judged."""
+    causes = []
     for name in names:
-        own = sorted((ln for ln in lines if ln.node == name and ln.host_time is not None),
-                     key=lambda ln: ln.host_time)
-        if not own:
-            out.append(f"{name}: no line since {format_host_time(since)}")
-            continue
-        boots = [f"{format_host_time(ln.host_time)[11:19]} {ln.fields.get('cls', '')} {ln.fields.get('build', '')}"
-                 for ln in own if ln.event == "BOOT" and ln.core == "0"]
-        silent = now - own[-1].host_time
-        out.append(f"{name}: {len(own)} lines, first {format_host_time(own[0].host_time)[11:19]}Z, "
-                   f"last {format_host_time(own[-1].host_time)[11:19]}Z ({silent.total_seconds() / 60:.0f} min ago), "
-                   f"CM0+ BOOT {'; '.join(boots) or 'none'}")
-        out.append(f"    SLOT per hour from the start: {_per_hour(own, 'SLOT', since)}")
-    return out
+        n = nodes.get(name)
+        if n is None:
+            causes.append(Cause("collector_export", f"{name}: not in this folder, pull it first", name))
+        elif n.problem:
+            causes.append(Cause("collector_export", f"{name}: {n.problem}", name))
+        elif n.complete_to is None:
+            causes.append(Cause("collector_export", f"{name}: the pull did not finish, lines are still to come", name))
+    return causes
 
 
-def judge(s: Scenario, build: str, names: dict[int, str], since: datetime, base: str, out_dir: Path,
-          pi_tz: tzinfo, flashed: dict[int, datetime] | None = None,
-          now: datetime | None = None, report=print) -> int:
-    """Fetch the collector's record of the run, decide the scenario on it, report; the exit code."""
+def _at_boundary(cause: Cause, boundaries: list[str]) -> bool:
+    """Whether a firmware cause sits right after a place where the pull cut the collector's lines into chunks."""
+    if cause.start is None:
+        return False
+    for b in boundaries:
+        if timedelta(0) <= cause.start - datetime.fromisoformat(b.replace("Z", "+00:00")) <= timedelta(seconds=BOUNDARY_S):
+            return True
+    return False
+
+
+def order_causes(stats: StreamStats) -> list[Cause]:
+    return [Cause("collector_order", f"{node}: {n} line(s) arrive more than the replay buffer's hour out of order "
+                  f"(first at {stats.first_late[node]:%H:%M:%S} UTC): the record cannot be put in time order", node)
+            for node, n in sorted(stats.late.items())]
+
+
+class NodeStats:
+    """What the summary says of one node, gathered line by line."""
+
+    def __init__(self, name: str, node_id: int | None, since: datetime) -> None:
+        self.name = name
+        self.node_id = node_id
+        self.since = since
+        self.lines = 0
+        self.first: datetime | None = None
+        self.last: datetime | None = None
+        self.boots: list[str] = []              # the first CM0+ BOOTs, as "HH:MM:SS cls build"
+        self.last_boot: str | None = None
+        self.boot_count = 0
+        self.slots: Counter[int] = Counter()
+
+    def feed(self, line: Line) -> None:
+        self.lines += 1
+        t = line.host_time
+        self.first = self.first or t
+        self.last = t
+        if line.event == "BOOT" and line.core == "0":
+            self.boot_count += 1
+            self.last_boot = f"{t:%H:%M:%S} {line.fields.get('cls', '')} {line.fields.get('build', '')}".strip()
+            if len(self.boots) < 20:
+                self.boots.append(self.last_boot)
+        elif line.event == "SLOT":
+            self.slots[max(0, int((t - self.since) / timedelta(hours=1)))] += 1
+
+    def per_hour(self) -> list[int]:
+        return [self.slots.get(h, 0) for h in range(max(self.slots) + 1)] if self.slots else []
+
+    def per_hour_summary(self) -> str:
+        """SLOT per hour as min / median / max over the whole hours (the arming hour and the last, partial, one
+        are left out once there are enough); the list itself is in the detail."""
+        hours = self.per_hour()
+        if not hours:
+            return "no SLOT"
+        whole = hours[1:-1] if len(hours) > 3 else hours
+        return f"SLOT/h min {min(whole)} med {statistics.median(whole):g} max {max(whole)}"
+
+    def summary(self, now: datetime) -> str:
+        label = self.name + (f" (Node {self.node_id})" if self.node_id is not None else "")
+        if self.last is None:
+            return f"{label}: no line since {format_host_time(self.since)}"
+        boots = f"{self.boot_count} BOOT" + (f", last {self.last_boot}" if self.boot_count else "")
+        return (f"{label}: {self.lines} lines, last {self.last:%H:%M:%S}Z ({(now - self.last).total_seconds() / 60:.0f}"
+                f" min ago), {boots}, {self.per_hour_summary()}")
+
+    def detail(self, now: datetime) -> list[str]:
+        out = [self.summary(now)]
+        if self.first is not None:
+            more = "" if self.boot_count <= len(self.boots) else f" (first {len(self.boots)} of {self.boot_count})"
+            out.append(f"    first line {format_host_time(self.first)}; CM0+ BOOT{more}: {'; '.join(self.boots) or 'none'}")
+            out.append(f"    SLOT per hour from the start: {self.per_hour()}")
+        return out
+
+
+def _clip(text: str, n: int = CLIP) -> str:
+    return text if len(text) <= n else text[:n - 1] + "..."
+
+
+def judge(s: Scenario, build: str, names: dict[int, str], since: datetime, directory: Path,
+          flashed: dict[int, datetime] | None = None, now: datetime | None = None, report=print,
+          verbose: bool = False, until: datetime | None = None) -> int:
+    """Decide the scenario from the pulled folder, report a summary of fixed size, write the detail to `judge.log`;
+    the exit code. `until` ends the run when the folder holds a later one of the same nodes (it is not guessed
+    from the scenario's timeout: a node that keeps running past it is still the run)."""
     now = now or datetime.now(timezone.utc)
+    directory = Path(directory)
+    state = load_state(directory)
+    if state is None:
+        raise PullError(f"{directory} is not a pulled record (no pull.json): run bench.pull first, into a new folder")
+    if state["build"] != build:
+        raise PullError(f"{directory} was pulled for build {state['build']}, not {build}")
     nodes = {n: names[n] for n in s.nodes}
+    names_list = list(nodes.values())
     boards = {nid: SimpleNamespace(node=name) for nid, name in nodes.items()}
-    numbers = ",".join(str(node_number(name)) for name in nodes.values())
-    start = (since - timedelta(minutes=5)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    text = http_get(f"{base}/logs?nodes={numbers}&since={start}")
-    status = json.loads(http_get(f"{base}/nodes"))
-    write_capture(text, out_dir, pi_tz)
+    detail: list[str] = [f"judge {format_host_time(now)}: build {build}, since {format_host_time(since)}, "
+                         f"nodes {', '.join(f'{i}={n}' for i, n in nodes.items())}"]
+    summary: list[str] = []
 
+    causes = export_causes(names_list, state["nodes"])
+    if causes:
+        return _finish(directory, summary, detail, causes, s, None, [], "", state, now, report, verbose, judged=False)
+
+    events, schema_note = _schema(directory, state)
     d = expect_spec(s, boards, build, flashed)
     d["smoke_window"] = SMOKE_WINDOW
     spec = spec_from_dict(d)
 
+    final: list[str] = []
+
     def say(msg: str) -> None:
-        # A run of hours counts every slot; only the count that completes an expectation is news.
-        m = _PROGRESS.match(msg)
-        if m is None or m[1] == m[2]:
-            report(msg)
+        detail.append(msg)
+        if msg.startswith(("PASS", "FAIL", "TIMEOUT")):
+            final.append(msg)
 
-    run = Run(spec, since, report=say)
-    lines = DirFollower(out_dir, list(spec.nodes), since).poll()
-    verdict = replay(run, lines) or run.tick(now)
+    end = min([now] + ([until] if until else []) +
+              [datetime.fromisoformat(n.complete_to.replace("Z", "+00:00"))
+               for name, n in state["nodes"].items() if name in nodes.values()])
+    # A run of hours counts every slot: only the count that completes an expectation is news.
+    run = Run(spec, since, report=say, events=events, progress=False)
+    audit = TraceAudit(spec, since, events=events)
+    silence = SilenceWatch(names_list, s.max_silence, since, end) if s.max_silence is not None else None
+    ids = {name: nid for nid, name in nodes.items()}
+    stats = {name: NodeStats(name, ids.get(name), since) for name in names_list}
+    seq = SeqTracker()
+    lost: Counter[str] = Counter()
+    order = StreamStats()
+    for line in merged_lines(directory, names_list, since, stats=order):
+        if until is not None and line.host_time > until:
+            break
+        if run.verdict is None and run.tick(line.host_time) is None:
+            run.feed(line)
+            run.tick(line.host_time)
+        audit.feed(line)
+        stats[line.node].feed(line)
+        lost[line.node] += seq.feed(line).lost
+        if silence is not None:
+            silence.feed(line)
+    verdict = run.verdict or run.tick(max([end] + [st.last for st in stats.values() if st.last]))
 
-    names_list = list(nodes.values())
-    for line in describe_nodes(names_list, lines, since, now):
-        report(line)
-    ordered = sorted(lines, key=lambda ln: ln.host_time)
-    lost = {name: sum(check([ln for ln in ordered if ln.node == name]).lost.values()) for name in names_list}
-    causes = collector_causes(names_list, status, since, lost) + trace_causes(spec, since, lines)
-    if s.max_silence is not None:
-        causes += silence_causes(lines, names_list, s.max_silence, since, now)
+    status = {name: n.status for name, n in state["nodes"].items() if name in names_list and n.status}
+    causes = collector_causes(names_list, status, since, dict(lost))
+    boundaries = {name: n.boundaries for name, n in state["nodes"].items()}
+    for cause in audit.causes():
+        if cause.kind == "lost_lines" and _at_boundary(cause, boundaries.get(cause.node, [])):
+            cause = Cause("collector_export", f"{cause.text}, right after a chunk boundary of the pull: "
+                          "the export lost it, not the firmware (pull into a new folder to see)", cause.node,
+                          cause.start, cause.end)
+        causes.append(cause)
+    if audit.dropped:
+        detail.append(f"{audit.dropped} more firmware event(s) of the kinds above were left out of the list")
+    causes += order_causes(order)
+    if silence is not None:
+        causes += silence.causes()
     else:
-        for note in quiet_notes(names_list, status):
-            report(f"WARN {note}")
-    for cause in causes:
-        report(f"WARN {cause.text}")
+        causes += [Cause("quiet", note, None, fault="note") for note in quiet_notes(names_list, status)]
+    if schema_note:
+        causes.append(Cause("schema", schema_note, None, fault="note"))
+    for st in stats.values():
+        detail += st.detail(end)
+        summary.append(st.summary(end))
+    pending = run.pending() if verdict is None else []
+    detail += [f"waiting for {p}" for p in pending]
+    waiting = f"; waiting for {pending[0]}" + (f" (+{len(pending) - 1} more)" if len(pending) > 1 else "") if pending else ""
+    return _finish(directory, summary, detail, causes, s, verdict, final, waiting, state, end, report, verbose,
+                   judged=True)
+
+
+def _schema(directory: Path, state: dict) -> tuple[dict | None, str | None]:
+    """The event table the record is checked with: that of the build (kept in the folder), else the checkout's, said."""
+    record = state.get("schema", {})
+    if str(record.get("source", "")).startswith("commit"):
+        try:
+            return events_from_dict(json.loads((directory / SCHEMA).read_text(encoding="utf-8"))), None
+        except (OSError, ValueError, KeyError):
+            return None, f"schema: {SCHEMA} of the build is missing or unreadable, the checkout's schema is used"
+    return None, f"schema: the checkout's is used ({record.get('why', 'no schema was kept with the record')})"
+
+
+def _finish(directory: Path, summary: list[str], detail: list[str], causes: list[Cause], s: Scenario, verdict,
+            final: list[str], waiting: str, state: dict, end: datetime, report, verbose: bool, judged: bool) -> int:
+    """The summary (fixed size), the detail file, the exit code."""
+    out: list[str] = []
     code = exit_code(verdict.code if verdict else 2, causes, s.dataset)
-    if invalidating(causes, s.dataset):
-        report(f"INVALID {len(invalidating(causes, s.dataset))} cause(s) make the data unfit to use: a bench fault, "
-               f"or a firmware event in a dataset session (verdict: {verdict.label if verdict else 'none yet'})")
-    elif verdict is None and code == 2:
-        report(f"NO VERDICT YET at {format_host_time(now)}: nothing has failed so far")
+    shown = [c for c in causes if c.fault != "note"]
+    if not judged:
+        out.append(f"INVALID the record is not whole: {len(shown)} cause(s), so it is not judged")
+    elif verdict is not None:
+        out.append(_clip(final[-1] if final else f"{verdict.label} {verdict.reason}"))
+    else:
+        out.append(f"NO VERDICT YET at {format_host_time(end)}: nothing has failed so far{waiting}")
+    out += summary
+    for cause in causes:
+        detail.append(f"WARN {cause.text}")
+    out += [f"WARN {_clip(c.text)}" for c in causes[:MAX_SHOWN]]
+    if len(causes) > MAX_SHOWN:
+        out.append(f"WARN +{len(causes) - MAX_SHOWN} more cause(s) in {JUDGE_LOG}")
+    if invalidating(causes, s.dataset) and judged:
+        out.append(f"INVALID {len(invalidating(causes, s.dataset))} cause(s) make the data unfit to use: a bench "
+                   f"fault, or a firmware event in a dataset session (verdict: "
+                   f"{verdict.label if verdict else 'none yet'})")
+    nodes = state["nodes"]
+    out.append(f"record: {len(nodes)} node(s), {sum(n.lines for n in nodes.values())} lines in the folder, "
+               f"schema {state['schema'].get('source')}, detail in {directory / JUDGE_LOG}")
+    detail.append("exit " + str(code))
+    (directory / JUDGE_LOG).write_text("\n".join(detail) + "\n", encoding="utf-8")
+    for line in out:
+        report(line)
+    if verbose:
+        for line in detail:
+            report(line)
     return code
-
-
-def _pairs(values: list[str], what: str) -> dict[int, str]:
-    out = {}
-    for v in values:
-        key, sep, val = v.partition("=")
-        if not sep or not key.isdigit():
-            raise ValueError(f"{what} {v!r}: use ID=VALUE")
-        out[int(key)] = val
-    return out
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m bench.collector", description=__doc__.split("\n\n")[0])
     p.add_argument("scenario", help="scenario file (TOML)")
-    p.add_argument("--collector", default=os.environ.get("BENCH_COLLECTOR_URL"),
-                   help="base URL of the log collector (default: $BENCH_COLLECTOR_URL)")
-    p.add_argument("--build", required=True, help="Build ID the flashed boards boot (bench flash prints it)")
-    p.add_argument("--since", required=True, help="ISO UTC time, before the flash")
-    p.add_argument("--node", action="append", default=[], metavar="ID=NAME",
-                   help="the collector's name of a Node ID's Pi Node, e.g. 2=nuna-node-03; repeat")
+    add_record_arguments(p)
     p.add_argument("--flashed", action="append", default=[], metavar="ID=ISO",
                    help="when a node's flash ended, to ignore its old image's lines; repeat")
-    p.add_argument("--dir", required=True, type=Path, help="where the capture files are written")
-    p.add_argument("--pi-tz", default="Europe/Paris", help="the Pi's time zone (default: %(default)s)")
+    p.add_argument("--until", help="ISO UTC time the run ended, when the folder holds a later run of the same nodes")
+    p.add_argument("--no-pull", action="store_true", help="judge the folder as it is, without asking the collector")
+    p.add_argument("--verbose", action="store_true", help="print the detail too (it is always in judge.log)")
     args = p.parse_args(argv)
     try:
-        if not args.collector:
-            raise ValueError("no collector: pass --collector or set BENCH_COLLECTOR_URL")
         s = load(args.scenario)
-        names = _pairs(args.node, "--node")
+        names = node_pairs(args.node, "--node")
         missing = [nid for nid in s.nodes if nid not in names]
         if missing:
             raise ValueError(f"--node is missing for Node ID {', '.join(map(str, missing))}")
-        flashed = {nid: parse_since(v) for nid, v in _pairs(args.flashed, "--flashed").items()}
-        return judge(s, args.build, names, parse_since(args.since), args.collector.rstrip("/"),
-                     args.dir, ZoneInfo(args.pi_tz), flashed or None)
+        flashed = {nid: parse_since(v) for nid, v in node_pairs(args.flashed, "--flashed").items()}
+        since = parse_since(args.since)
+        if not args.no_pull:
+            if not args.collector:
+                raise ValueError("no collector: pass --collector or set BENCH_COLLECTOR_URL, or --no-pull")
+            pull(args.collector.rstrip("/"), [names[n] for n in s.nodes], args.build, since, args.dir,
+                 ZoneInfo(args.pi_tz), chunk=args.chunk, schema_source=schema_from_git)
+        return judge(s, args.build, names, since, args.dir, flashed or None, verbose=args.verbose,
+                     until=parse_since(args.until) if args.until else None)
     except (OSError, ValueError) as exc:
         print(f"bench.collector: {exc}", file=sys.stderr)
         return 3

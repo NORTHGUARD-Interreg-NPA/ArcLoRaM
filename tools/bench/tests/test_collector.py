@@ -1,4 +1,4 @@
-"""bench.collector: the log collector's lines decide a scenario the way a capture does."""
+"""bench.collector: the pulled record of a run decides a scenario the way a capture does."""
 
 import json
 import re
@@ -6,17 +6,19 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
+from fake_collector import FakeCollector, soak
 
+from arclog.schema import EVENTS, Event
 from bench import collector
-from bench.collector import (collector_causes, convert_line, judge, node_number, pi_clock_states, quiet_notes,
-                             write_capture)
+from bench.collector import (collector_causes, export_causes, judge, node_number, pi_clock_states, quiet_notes)
+from bench.pull import NodeState, PullError, load_state, pull
 from bench.scenario import from_dict
 
 PARIS = ZoneInfo("Europe/Paris")
 UTC = timezone.utc
 SINCE = datetime(2026, 10, 7, 2, 28, 0, tzinfo=UTC)
 
-# The first lines of nuna-node-03 after its reset on 2026-10-07, as the collector returns them
+# The first lines of nuna-node-03 after its reset on 2026-10-07, as the collector holds them
 # (the Pi's local time, CEST): both cores boot as a C2 of build 474afcb, then it scans, takes a Sync
 # packet and logs a slot every 20 s.
 LOG = """2026-10-07 04:28:49.349199 | nuna-node-03 | 000000T000000.9997 4S A #00 BOOT build=474afcb
@@ -36,25 +38,48 @@ LOG = """2026-10-07 04:28:49.349199 | nuna-node-03 | 000000T000000.9997 4S A #00
 2026-10-07 04:31:16.850983 | nuna-node-03 | 000101T235822.0000 0Y L #09 CLK from=COLD to=ACQ why=rtc_set
 2026-10-07 04:31:16.917500 | nuna-node-03 | 000101T235822.0000 0T M #0a BOOTSTRAP ph=1 ce=0 nom=86300032
 2026-10-07 04:31:35.423266 | nuna-node-03 | 000101T235839.9335 0T H #0b SLOT ph=1 ty=SYNC ce=1 sl=0 pos=CELL dec=RX wake=0 nom=86320032
-2026-10-07 04:31:35.506469 | nuna-node-03 | 000101T235839.9387 0T H #0c RX_WIN last=86321640 cap=86322632 g=500 win=1701
+2026-10-07 04:31:35.506469 | nuna-node-03 | 000101T235839.9387 0T H #0c RX_WIN last=86321640 cap=86322632
 2026-10-07 04:31:37.389852 | nuna-node-03 | 000101T235841.9028 0R H #0d RX_TIMEOUT pre=0
 2026-10-07 04:31:55.423861 | nuna-node-03 | 000101T235859.9335 0T H #0e SLOT ph=1 ty=SYNC ce=2 sl=0 pos=CELL dec=RX wake=0 nom=86340032
-2026-10-07 04:31:55.507063 | nuna-node-03 | 000101T235859.9387 0T H #0f RX_WIN last=86341640 cap=86342632 g=500 win=1701
+2026-10-07 04:31:55.507063 | nuna-node-03 | 000101T235859.9387 0T H #0f RX_WIN last=86341640 cap=86342632
 2026-10-07 04:31:57.390524 | nuna-node-03 | 000101T235901.9028 0R H #10 RX_TIMEOUT pre=0
 2026-10-07 04:32:15.424464 | nuna-node-03 | 000101T235919.9335 0T H #11 SLOT ph=1 ty=SYNC ce=3 sl=0 pos=CELL dec=RX wake=0 nom=86360032
-2026-10-07 04:32:15.507665 | nuna-node-03 | 000101T235919.9387 0T H #12 RX_WIN last=86361640 cap=86362632 g=500 win=1701
+2026-10-07 04:32:15.507665 | nuna-node-03 | 000101T235919.9387 0T H #12 RX_WIN last=86361640 cap=86362632
 2026-10-07 04:32:17.391533 | nuna-node-03 | 000101T235921.9033 0R H #13 RX_TIMEOUT pre=0
 2026-10-07 04:32:29.615269 | nuna-node-03 | 000101T235934.1264 0P M #14 STOP2_WAKES n=128
 2026-10-07 04:32:35.425072 | nuna-node-03 | 000101T235939.9335 0T H #15 SLOT ph=1 ty=SYNC ce=4 sl=0 pos=CELL dec=RX wake=0 nom=86380032
-2026-10-07 04:32:35.508263 | nuna-node-03 | 000101T235939.9387 0T H #16 RX_WIN last=86381640 cap=86382632 g=500 win=1701
+2026-10-07 04:32:35.508263 | nuna-node-03 | 000101T235939.9387 0T H #16 RX_WIN last=86381640 cap=86382632
 2026-10-07 04:32:37.392262 | nuna-node-03 | 000101T235941.9033 0R H #17 RX_TIMEOUT pre=0
 2026-10-07 04:32:55.424710 | nuna-node-03 | 000101T235959.9335 0T H #18 SLOT ph=1 ty=SYNC ce=5 sl=0 pos=CELL dec=RX wake=0 nom=32
-2026-10-07 04:32:55.507927 | nuna-node-03 | 000101T235959.9377 0T H #19 RX_WIN last=1640 cap=2632 g=500 win=1702
+2026-10-07 04:32:55.507927 | nuna-node-03 | 000101T235959.9377 0T H #19 RX_WIN last=1640 cap=2632
 2026-10-07 04:32:57.390468 | nuna-node-03 | 000102T000001.9011 0R H #1a RX_TIMEOUT pre=0
 2026-10-07 04:33:15.425573 | nuna-node-03 | 000102T000019.9335 0T H #1b SLOT ph=1 ty=SYNC ce=6 sl=0 pos=CELL dec=RX wake=0 nom=20032
-2026-10-07 04:33:15.508803 | nuna-node-03 | 000102T000019.9382 0T H #1c RX_WIN last=21640 cap=22632 g=500 win=1702"""
-# The same lines as the collector writes them now: ISO 8601 with the offset.
-LOG_ISO = re.sub(r"^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d\.\d+) ", r"\1T\2+02:00 ", LOG, flags=re.M)
+2026-10-07 04:33:15.508803 | nuna-node-03 | 000102T000019.9382 0T H #1c RX_WIN last=21640 cap=22632"""
+
+NODE3 = "nuna-node-03"
+# The build 474afcb is from before #36: its RX_WIN has no g and win, and the checkout's schema requires them.
+OLD_BUILD = dict(EVENTS, RX_WIN=Event("T", ("last", "cap"), ""))
+
+
+def schema_text(events: dict) -> str:
+    items = ",\n".join(f"{n!r}: Event({e.mod!r}, {e.keys!r}, '', {e.optional!r})" for n, e in events.items())
+    return f"EVENTS = {{\n{items}\n}}\n"
+
+
+def old_schema(commit: str) -> str:
+    return schema_text(OLD_BUILD)
+
+
+def rows_of(text: str) -> list[tuple[datetime, str]]:
+    """(the Pi's time, device line) of each line of a log in the collector's first text format."""
+    out = []
+    for raw in text.splitlines():
+        when, _, device = raw.split(" | ", 2)
+        out.append((datetime.fromisoformat(when).replace(tzinfo=PARIS), device))
+    return out
+
+
+ROWS = rows_of(LOG)
 FIRST_SLOT = next(i for i, ln in enumerate(LOG.splitlines()) if " SLOT " in ln)
 SCENARIO = {"nodes": {"2": "C2"}, "timeout": "20m",
             "expect": [{"node": 2, "event": "SLOT", "count": 3, "within": "5m"}]}
@@ -62,85 +87,98 @@ STATUS = {"nuna-node-03": {"connected": True, "connected_since": "2026-10-07T02:
                            "last_pi_timestamp": None, "last_line_received": None, "last_error": None}}
 
 
-def collector_serving(monkeypatch, log: str, status: dict = STATUS) -> list[str]:
-    asked: list[str] = []
-
-    def http_get(url: str, timeout: float = 120.0) -> str:
-        asked.append(url)
-        return json.dumps(status) if url.endswith("/nodes") else log
-
-    monkeypatch.setattr(collector, "http_get", http_get)
-    return asked
 
 
-def run_judge(tmp_path, now: datetime, log: str = LOG, scenario: dict = SCENARIO) -> tuple[int, list[str]]:
+@pytest.fixture
+def serve():
+    started = []
+
+    def serve(rows_by_node: dict[str, list], status: dict | None = None, **kw) -> tuple[FakeCollector, str]:
+        fake = FakeCollector(list(rows_by_node), **kw)
+        started.append(fake)
+        for name, rows in rows_by_node.items():
+            fake.add(name, SINCE - timedelta(hours=2), "[collector] connected", source="collector")
+            fake.add_all(name, rows)
+            fake.status[name].update((status or {}).get(name, {}))
+        return fake, fake.start()
+
+    yield serve
+    for fake in started:
+        fake.stop()
+
+
+def run_judge(tmp_path, serve, now: datetime, rows=ROWS, scenario=SCENARIO, status: dict | None = None,
+              schema=old_schema, **kw) -> tuple[int, list[str]]:
+    """Pull the fake collector's record of the run into a folder and judge the folder."""
+    fake, base = serve({NODE3: rows}, status={NODE3: status or {}})
+    folder = tmp_path / "record"
+    pull(base, [NODE3], "474afcb", SINCE, folder, PARIS, schema_source=schema)
     said: list[str] = []
-    code = judge(from_dict(scenario), "474afcb", {2: "nuna-node-03"}, SINCE, "http://collector",
-                 tmp_path, PARIS, now=now, report=said.append)
+    code = judge(from_dict(scenario), "474afcb", {2: NODE3}, SINCE, folder, now=now, report=said.append, **kw)
     return code, said
 
 
-def test_a_collector_line_is_in_utc_with_its_node_and_device_line():
-    node, t, device = convert_line(LOG.splitlines()[5], PARIS)
-    assert node == "nuna-node-03"
-    assert t == datetime(2026, 10, 7, 2, 28, 49, 615240, tzinfo=UTC)
-    assert device.startswith("000101T000000.0034 0S A #00 BOOT cls=C2 id=2")
+def detail(tmp_path) -> str:
+    return (tmp_path / "record" / "judge.log").read_text()
 
 
-def test_a_line_with_its_offset_is_converted_without_the_pi_zone():
-    node, t, device = convert_line(LOG_ISO.splitlines()[5], UTC)
-    assert node == "nuna-node-03"
-    assert t == datetime(2026, 10, 7, 2, 28, 49, 615240, tzinfo=UTC)
-    assert device.startswith("000101T000000.0034 0S A #00 BOOT cls=C2 id=2")
+def verdict_line(said: list[str]) -> str:
+    return said[0]
 
 
-def test_the_pi_s_own_lines_are_not_trace_lines():
-    pi = "2026-10-07T16:04:04.856452+02:00 | nuna-node-03 | [pi] uart_idle=6s ntp=synced"
-    assert convert_line(pi, PARIS) is None
 
-
-@pytest.mark.parametrize("text", ["", "# collector: connected", "nuna-node-03 | no time"])
-def test_a_line_of_another_shape_is_skipped(text):
-    assert convert_line(text, PARIS) is None
-
-
-def test_capture_files_are_split_at_utc_midnight(tmp_path):
-    text = ("2026-10-08 01:59:59.500000 | nuna-node-03 | 000102T000000.0000 0P M #00 STOP2_WAKES n=1\n"
-            "2026-10-08 02:00:01.500000 | nuna-node-03 | 000102T000002.0000 0P M #01 STOP2_WAKES n=2\n")
-    assert write_capture(text, tmp_path, PARIS) == {"nuna-node-03": 2}
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["nuna-node-03-20261007.log", "nuna-node-03-20261008.log"]
-    assert (tmp_path / "nuna-node-03-20261007.log").read_text().startswith("2026-10-07T23:59:59.500000Z\t")
-
-
-def test_node_numbers_come_from_the_name():
+def test_a_node_name_gives_its_collector_number():
     assert node_number("nuna-node-03") == 3 and node_number("nuna-node-12") == 12
     with pytest.raises(ValueError):
         node_number("collector")
 
 
-@pytest.mark.parametrize("log", [LOG, LOG_ISO], ids=["first format", "iso with offset"])
-def test_a_run_whose_expectations_are_in_the_collector_passes(monkeypatch, tmp_path, log):
-    asked = collector_serving(monkeypatch, log)
-    code, said = run_judge(tmp_path, SINCE + timedelta(minutes=16), log)
+def test_a_run_whose_expectations_are_in_the_collector_passes(tmp_path, serve):
+    code, said = run_judge(tmp_path, serve, SINCE + timedelta(minutes=16))
+
     assert code == 0, said
-    assert asked[0] == "http://collector/logs?nodes=3&since=2026-10-07T02:23:00Z"
-    assert any("SLOT (3/3)" in m for m in said) and not any("SLOT (1/3)" in m for m in said)
+    assert said[0].startswith("PASS")
+    # the stage lines are in the detail file, not in what is printed
+    assert "SLOT (3/3)" in detail(tmp_path) and "SLOT (1/3)" not in detail(tmp_path)
+    assert not any("SLOT (3/3)" in m for m in said)
 
 
-def test_a_node_that_went_silent_fails_its_expectation_at_the_wall_clock(monkeypatch, tmp_path):
-    before_the_first_slot = "\n".join(LOG.splitlines()[:FIRST_SLOT])
-    collector_serving(monkeypatch, before_the_first_slot)
-    code, said = run_judge(tmp_path, SINCE + timedelta(minutes=16), before_the_first_slot)
+def test_the_pull_asks_the_collector_for_one_node_from_five_minutes_before_the_start_without_the_heartbeat(
+        tmp_path, serve):
+    fake, base = serve({NODE3: ROWS})
+    pull(base, [NODE3], "474afcb", SINCE, tmp_path / "record", PARIS, schema_source=old_schema)
+
+    first = next(r for r in fake.requests if r.startswith("/logs"))
+    assert "nodes=nuna-node-03" in first and "since=2026-10-07T02%3A23%3A00.000000Z" in first
+    assert "exclude=pi" in first and "format=json" in first
+
+
+def test_a_node_that_went_silent_fails_its_expectation_at_the_wall_clock(tmp_path, serve):
+    before_the_first_slot = ROWS[:FIRST_SLOT]
+    code, said = run_judge(tmp_path, serve, SINCE + timedelta(minutes=16), before_the_first_slot)
+
     assert code == 1
-    assert any("SLOT" in m and "not within" in m for m in said)
+    assert said[0].startswith("FAIL") and "SLOT" in said[0] and "not within" in said[0]
 
 
-def test_a_run_not_yet_due_has_no_verdict(monkeypatch, tmp_path):
-    before_the_first_slot = "\n".join(LOG.splitlines()[:FIRST_SLOT])
-    collector_serving(monkeypatch, before_the_first_slot)
-    code, said = run_judge(tmp_path, SINCE + timedelta(minutes=2), before_the_first_slot)
+def test_a_run_not_yet_due_has_no_verdict_and_says_what_it_waits_for(tmp_path, serve):
+    before_the_first_slot = ROWS[:FIRST_SLOT]
+    code, said = run_judge(tmp_path, serve, SINCE + timedelta(minutes=2), before_the_first_slot)
+
     assert code == 2
-    assert any(m.startswith("NO VERDICT YET") for m in said)
+    assert said[0].startswith("NO VERDICT YET") and "waiting for nuna-node-03 SLOT (0/3)" in said[0]
+
+
+def test_the_record_is_judged_with_the_schema_of_its_build_and_not_the_checkouts(tmp_path, serve):
+    code, said = run_judge(tmp_path, serve, SINCE + timedelta(minutes=16), schema=old_schema)
+    assert code == 0, said
+    assert "schema commit 474afcb" in said[-1] and not any(m.startswith("WARN schema") for m in said)
+
+    # the checkout's schema requires g and win on RX_WIN: this build does not print them
+    code, said = run_judge(tmp_path / "again", serve, SINCE + timedelta(minutes=16), schema=lambda c: None)
+    assert code == 1
+    assert "RX_WIN: missing g,win" in said[0]
+    assert any(m.startswith("WARN schema: the checkout's is used") for m in said)
 
 
 NODE = "nuna-node-01"
@@ -198,60 +236,58 @@ def test_a_node_quiet_for_over_ten_minutes_is_a_heads_up_and_not_a_cause():
     assert quiet_notes([NODE], {NODE: {"connected": False, "silent_for_s": 3600}}) == []
 
 
+
+
 def status_with(**fields) -> dict:
     return {"nuna-node-03": {**STATUS["nuna-node-03"], **fields}}
 
 
-def test_a_passing_run_on_a_pi_with_an_unsynchronised_clock_is_invalid(monkeypatch, tmp_path):
-    collector_serving(monkeypatch, LOG, status_with(pi_ntp="unsynced"))
-    code, said = run_judge(tmp_path, SINCE + timedelta(minutes=16))
+
+def test_a_passing_run_on_a_pi_with_an_unsynchronised_clock_is_invalid(tmp_path, serve):
+    code, said = run_judge(tmp_path, serve, SINCE + timedelta(minutes=16), status={"pi_ntp": "unsynced"})
 
     assert code == 4
     assert any(m.startswith("WARN ") and "not synchronised" in m for m in said)
-    assert any("SLOT (3/3)" in m for m in said)  # the verdict is still reached and said
+    assert said[0].startswith("PASS")  # the verdict is still reached and said
     assert any(m.startswith("INVALID") for m in said)
 
 
-def test_a_quiet_node_is_a_warning_when_the_scenario_does_not_watch_its_silence(monkeypatch, tmp_path):
-    collector_serving(monkeypatch, LOG, status_with(silent_for_s=3600))
-    code, said = run_judge(tmp_path, SINCE + timedelta(minutes=16))
+def test_a_quiet_node_is_a_warning_when_the_scenario_does_not_watch_its_silence(tmp_path, serve):
+    code, said = run_judge(tmp_path, serve, SINCE + timedelta(minutes=16), status={"silent_for_s": 3600})
 
     assert code == 0
     assert any(m.startswith("WARN ") and "no line from it" in m for m in said)
 
 
-def test_a_node_silent_longer_than_max_silence_fails_a_run_that_met_its_expectations(monkeypatch, tmp_path):
-    collector_serving(monkeypatch, LOG)
+def test_a_node_silent_longer_than_max_silence_fails_a_run_that_met_its_expectations(tmp_path, serve):
     now = SINCE + timedelta(minutes=16)  # the log ends 10 min 44.5 s before
 
-    assert run_judge(tmp_path / "off", now)[0] == 0
-    code, said = run_judge(tmp_path / "on", now, scenario={**SCENARIO, "max_silence": "10m"})
+    assert run_judge(tmp_path / "off", serve, now)[0] == 0
+    code, said = run_judge(tmp_path / "on", serve, now, scenario={**SCENARIO, "max_silence": "10m"})
     assert code == 1
     assert any(m.startswith("WARN ") and "no line for 644 s" in m for m in said)
-    assert run_judge(tmp_path / "long", now, scenario={**SCENARIO, "max_silence": "20m"})[0] == 0
+    assert run_judge(tmp_path / "long", serve, now, scenario={**SCENARIO, "max_silence": "20m"})[0] == 0
 
 
-def test_lines_lost_across_a_reconnect_invalidate_the_run_that_lost_them_alone_fail_it(monkeypatch, tmp_path):
-    gapped = "\n".join(ln for ln in LOG.splitlines() if " #0c " not in ln)
-    collector_serving(monkeypatch, gapped)
-    assert run_judge(tmp_path / "alone", SINCE + timedelta(minutes=16), gapped)[0] == 1
+def test_lines_lost_across_a_reconnect_invalidate_the_run_that_lost_them_alone_fail_it(tmp_path, serve):
+    gapped = [r for r in ROWS if " #0c " not in r[1]]
+    assert run_judge(tmp_path / "alone", serve, SINCE + timedelta(minutes=16), gapped)[0] == 1
 
-    collector_serving(monkeypatch, gapped, status_with(connected_since="2026-10-07T03:00:00+00:00"))
-    code, said = run_judge(tmp_path / "reconnected", SINCE + timedelta(minutes=16), gapped)
+    code, said = run_judge(tmp_path / "reconnected", serve, SINCE + timedelta(minutes=16), gapped,
+                           status={"connected_since": "2026-10-07T03:00:00+00:00"})
     assert code == 4
     assert any(m.startswith("WARN ") and "1 lines lost" in m for m in said)
 
 
-def test_a_firmware_event_invalidates_a_dataset_session_and_only_fails_an_acceptance_run(monkeypatch, tmp_path):
-    gapped = "\n".join(ln for ln in LOG.splitlines() if " #0c " not in ln)
-    collector_serving(monkeypatch, gapped)
+def test_a_firmware_event_invalidates_a_dataset_session_and_only_fails_an_acceptance_run(tmp_path, serve):
+    gapped = [r for r in ROWS if " #0c " not in r[1]]
     now = SINCE + timedelta(minutes=16)
 
-    code, said = run_judge(tmp_path / "acceptance", now, gapped)
+    code, said = run_judge(tmp_path / "acceptance", serve, now, gapped)
     assert code == 1
     assert any(m.startswith("WARN ") and "1 line(s) lost before core 0 #0d" in m for m in said)
 
-    code, said = run_judge(tmp_path / "dataset", now, gapped, scenario={**SCENARIO, "dataset": True})
+    code, said = run_judge(tmp_path / "dataset", serve, now, gapped, scenario={**SCENARIO, "dataset": True})
     assert code == 4
     assert any(m.startswith("INVALID") for m in said)
 
@@ -259,7 +295,7 @@ def test_a_firmware_event_invalidates_a_dataset_session_and_only_fails_an_accept
 def test_the_pi_clock_states_are_the_collector_s_view_of_the_run_s_pi_nodes(monkeypatch):
     status = {"nuna-node-03": {"connected": True, "pi_ntp": "synced", "clock_lag_s": 0.07, "silent_for_s": 3},
               "nuna-node-01": {"connected": True, "pi_ntp": "unsynced"}, "nuna-node-09": {"pi_ntp": "synced"}}
-    collector_serving(monkeypatch, "", status)
+    monkeypatch.setattr(collector, "http_get", lambda url, timeout=120.0: json.dumps(status))
 
     assert pi_clock_states("http://collector", ["nuna-node-03", "nuna-node-01", "com8"]) == {
         "nuna-node-03": {"pi_ntp": "synced", "clock_lag_s": 0.07}, "nuna-node-01": {"pi_ntp": "unsynced"}}
@@ -272,3 +308,201 @@ def test_a_collector_that_cannot_be_asked_gives_no_pi_clock_states(monkeypatch):
     monkeypatch.setattr(collector, "http_get", refuse)
     assert pi_clock_states("http://collector", ["nuna-node-03"]) == {}
     assert pi_clock_states(None, ["nuna-node-03"]) == {}
+
+
+# --- a record that is not whole is not judged -------------------------------------------------------------------
+
+
+def serve_two_runs(serve):
+    """Run A at 08:43 and run B at 14:08 of the same build on one node: their first lines print the same text."""
+    a = soak(datetime(2026, 10, 7, 8, 43, tzinfo=UTC), 0.2, "16ee4e5-o954ffd")
+    b = soak(datetime(2026, 10, 7, 14, 8, tzinfo=UTC), 0.2, "16ee4e5-o954ffd")
+    return serve({NODE3: a + b})
+
+
+SOAK = {"nodes": {"2": "C2"}, "timeout": "30m", "expect": [{"node": 2, "event": "SLOT", "count": 30, "within": "20m"}]}
+
+
+def judge_soak(folder, since: datetime, now: datetime, scenario=SOAK, build="16ee4e5-o954ffd", **kw):
+    said: list[str] = []
+    code = judge(from_dict(scenario), build, {2: NODE3}, since, folder, now=now, report=said.append, **kw)
+    return code, said
+
+
+def test_two_runs_of_the_same_build_in_one_folder_are_each_judged_with_their_first_lines(tmp_path, serve):
+    fake, base = serve_two_runs(serve)
+    folder = tmp_path / "record"
+    start = datetime(2026, 10, 7, 8, 40, tzinfo=UTC)
+    pull(base, [NODE3], "16ee4e5-o954ffd", start, folder, PARIS, schema_source=lambda c: None)
+
+    for since in (start, datetime(2026, 10, 7, 14, 5, tzinfo=UTC)):
+        code, said = judge_soak(folder, since, since + timedelta(hours=1), until=since + timedelta(minutes=30))
+        assert code == 0, said
+        assert "1 BOOT" in said[1], "each run sees its own BOOT and only that"
+    # without `until` the later run is a reboot nobody planned
+    code, said = judge_soak(folder, start, start + timedelta(hours=8), scenario={**SOAK, "dataset": True})
+    assert code == 4 and any("unexpected reboot" in m for m in said)
+
+
+def test_a_pull_that_hit_the_collector_s_retention_before_the_start_is_an_unfit_record_not_a_missing_boot(
+        tmp_path, serve):
+    fake, base = serve_two_runs(serve)
+    fake.drop_oldest(NODE3, 60)  # the first run's lines and the pre-run history are gone
+    folder = tmp_path / "record"
+    start = datetime(2026, 10, 7, 8, 40, tzinfo=UTC)
+    pull(base, [NODE3], "16ee4e5-o954ffd", start, folder, PARIS, schema_source=lambda c: None)
+
+    code, said = judge_soak(folder, start, start + timedelta(minutes=30))
+
+    assert code == 4
+    assert said[0].startswith("INVALID the record is not whole")
+    assert any("no longer holds the beginning" in m for m in said)
+    assert not any("FAIL" in m or "BOOT" in m for m in said), "no verdict on the nodes"
+
+
+def test_a_pull_cut_short_is_never_judged(tmp_path, serve):
+    fake, base = serve({NODE3: ROWS}, cap=10)
+    fake.fail_logs_after = 2
+    folder = tmp_path / "record"
+    with pytest.raises(OSError):
+        pull(base, [NODE3], "474afcb", SINCE, folder, PARIS, chunk=10, schema_source=old_schema)
+
+    said: list[str] = []
+    code = judge(from_dict(SCENARIO), "474afcb", {2: NODE3}, SINCE, folder, now=SINCE + timedelta(minutes=16),
+                 report=said.append)
+
+    assert code == 4 and "the pull did not finish" in "\n".join(said)
+    assert not any(m.startswith("FAIL") for m in said)
+
+
+def test_a_pull_that_is_still_truncated_is_never_judged(tmp_path, serve):
+    fake, base = serve({NODE3: ROWS})
+    folder = tmp_path / "record"
+    pull(base, [NODE3], "474afcb", SINCE, folder, PARIS, schema_source=old_schema)
+    state = load_state(folder)
+    assert export_causes([NODE3], state["nodes"]) == []
+    state["nodes"][NODE3].problem = "the collector says there is more but sent no line: the pull cannot go on"
+
+    [cause] = export_causes([NODE3], state["nodes"])
+
+    assert (cause.kind, cause.fault, cause.node) == ("collector_export", "bench", NODE3)
+    assert "cannot go on" in cause.text
+    [unknown] = export_causes(["nuna-node-09"], state["nodes"])
+    assert "pull it first" in unknown.text
+    [unfinished] = export_causes([NODE3], {NODE3: NodeState(NODE3)})
+    assert "did not finish" in unfinished.text
+
+
+def test_a_gap_right_after_a_chunk_boundary_of_the_pull_is_the_export_s_and_one_inside_a_chunk_is_the_nodes(
+        tmp_path, serve):
+    rows = soak(SINCE, 0.3, "474afcb")
+    holed = (rows[:19] + rows[20:])[:57]  # the 20th line is missing: three chunks of 19 meet right after the hole
+    scenario = {"nodes": {"2": "C2"}, "timeout": "30m"}
+    results = {}
+    for chunk in (19, 200):
+        fake, base = serve({NODE3: holed})
+        folder = tmp_path / str(chunk)
+        pull(base, [NODE3], "474afcb", SINCE, folder, PARIS, chunk=chunk, schema_source=lambda c: None)
+        said: list[str] = []
+        code = judge(from_dict(scenario), "474afcb", {2: NODE3}, SINCE, folder, now=SINCE + timedelta(minutes=30),
+                     report=said.append)
+        results[chunk] = (code, said)
+
+    code, said = results[19]
+    assert code == 4 and any("chunk boundary of the pull" in m for m in said), said
+    code, said = results[200]
+    assert code == 1 and any("line(s) lost" in m for m in said), said
+
+
+def test_lines_more_than_the_replay_buffer_out_of_order_make_the_record_unfit(tmp_path, serve):
+    rows = soak(SINCE, 3, "474afcb")
+    fake, base = serve({NODE3: rows})
+    folder = tmp_path / "record"
+    pull(base, [NODE3], "474afcb", SINCE, folder, PARIS, schema_source=lambda c: None)
+    # a line stored now with the Pi time of 100 minutes before the newest: the Pi buffers an hour
+    fake.add(NODE3, rows[-1][0] - timedelta(minutes=100), "260101T000000.0000 0T H #0b SLOT ph=1 ty=SYNC ce=1 sl=0 "
+                                                          "pos=CELL dec=RX wake=0 nom=1")
+    pull(base, [NODE3], "474afcb", SINCE, folder, PARIS, schema_source=lambda c: None)
+
+    code, said = judge_soak(folder, SINCE, SINCE + timedelta(hours=4),
+                            scenario={"nodes": {"2": "C2"}, "timeout": "4h"}, build="474afcb")
+
+    assert code == 4
+    assert any("out of order" in m for m in said)
+
+
+def test_a_folder_that_no_pull_made_or_that_was_pulled_for_another_build_is_refused(tmp_path, serve):
+    fake, base = serve({NODE3: ROWS})
+    empty = tmp_path / "empty"
+    empty.mkdir()
+
+    with pytest.raises(PullError, match="not a pulled record"):
+        judge(from_dict(SCENARIO), "474afcb", {2: NODE3}, SINCE, empty, now=SINCE)
+    pull(base, [NODE3], "474afcb", SINCE, tmp_path / "record", PARIS, schema_source=old_schema)
+    with pytest.raises(PullError, match="pulled for build 474afcb, not abc1234"):
+        judge(from_dict(SCENARIO), "abc1234", {2: NODE3}, SINCE, tmp_path / "record", now=SINCE)
+
+
+# --- what is printed ------------------------------------------------------------------------------------------
+
+
+def test_the_summary_is_a_verdict_a_line_per_node_and_the_record_and_the_detail_goes_to_a_file(tmp_path, serve):
+    code, said = run_judge(tmp_path, serve, SINCE + timedelta(minutes=16))
+
+    assert code == 0
+    assert len(said) == 3, said
+    assert said[0].startswith("PASS")
+    assert said[1].startswith("nuna-node-03 (Node 2): 34 lines, last 02:33:15Z") and "1 BOOT, last 02:28:49 C2 474afcb" in said[1]
+    assert said[2].startswith("record: 1 node(s), 34 lines in the folder, schema commit 474afcb, detail in ")
+    log = detail(tmp_path)
+    assert "ok   nuna-node-03 armed" in log and "ok   nuna-node-03 CORE_SYNC stage=linked" in log
+    assert log.rstrip().endswith("exit 0")
+
+
+def test_verbose_prints_the_detail_too(tmp_path, serve):
+    code, said = run_judge(tmp_path, serve, SINCE + timedelta(minutes=16), verbose=True)
+
+    assert code == 0
+    assert any(m.startswith("ok   nuna-node-03 armed") for m in said)
+    assert said[-1] == "exit 0"
+
+
+def test_the_causes_shown_are_the_first_five_and_the_rest_are_counted(tmp_path, serve):
+    rows = soak(SINCE, 0.3, "474afcb")
+    holed = [r for i, r in enumerate(rows) if i % 7 != 3]  # lines lost all along
+    fake, base = serve({NODE3: holed})
+    folder = tmp_path / "record"
+    pull(base, [NODE3], "474afcb", SINCE, folder, PARIS, schema_source=lambda c: None)
+
+    code, said = judge_soak(folder, SINCE, SINCE + timedelta(minutes=30), scenario={"nodes": {"2": "C2"}, "timeout": "30m",
+                            "dataset": True}, build="474afcb")
+
+    assert code == 4
+    assert len([m for m in said if m.startswith("WARN ")]) == 6
+    assert re.search(r"WARN \+\d+ more cause\(s\) in .*judge.log", " ".join(said))
+    assert len(said) <= 12
+    assert (folder / "judge.log").read_text().count("WARN ") > 6
+
+
+def test_the_command_line_pulls_then_judges_and_judges_a_folder_again_without_the_collector(tmp_path, serve, capsys,
+                                                                                         monkeypatch):
+    monkeypatch.delenv("BENCH_COLLECTOR_URL", raising=False)
+    from bench import pull as pulling
+    monkeypatch.setattr(pulling, "schema_from_git", old_schema)
+    monkeypatch.setattr(collector, "schema_from_git", old_schema)
+    scenario = tmp_path / "x.toml"
+    scenario.write_text('timeout = "20m"\n[nodes]\n2 = "C2"\n[[expect]]\nnode = 2\nevent = "SLOT"\ncount = 3\nwithin = "5m"\n')
+    fake, base = serve({NODE3: ROWS})
+    common = ["--build", "474afcb", "--since", "2026-10-07T02:28:00Z", "--node", "2=" + NODE3]
+    pulled = ["--dir", str(tmp_path / "cli")]
+
+    # the clock is real, so the run is long past its timeout: the verdict is still the record's
+    assert collector.main([str(scenario), "--collector", base, *common, *pulled]) == 0
+    assert capsys.readouterr().out.startswith("PASS")
+    requests = len(fake.requests)
+    assert collector.main([str(scenario), *common, *pulled, "--no-pull"]) == 0
+    assert len(fake.requests) == requests, "--no-pull does not ask the collector"
+    assert collector.main([str(scenario), *common, "--dir", str(tmp_path / "elsewhere"), "--no-pull"]) == 3
+    assert "not a pulled record" in capsys.readouterr().err
+    assert collector.main([str(scenario), *common, "--dir", str(tmp_path / "nowhere")]) == 3
+    assert "no collector" in capsys.readouterr().err

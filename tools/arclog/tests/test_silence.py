@@ -4,7 +4,7 @@ from datetime import timedelta
 
 from test_expect import SINCE, Trace
 
-from arclog.validity import silence_causes
+from arclog.validity import SilenceWatch, silence_causes
 
 
 def at(seconds: float):
@@ -49,3 +49,17 @@ def test_a_node_that_stopped_is_silent_from_its_last_line_to_the_end_of_the_wind
 
 def test_a_node_that_never_logged_is_silent_for_the_whole_window():
     assert silences([], end=300) == [("node_silent", "node", "n2", at(0), at(300))]
+
+
+def test_the_lines_can_be_fed_one_at_a_time_and_give_the_same_causes():
+    lines = lines_at(10, 20, 320, 330) + lines_at(15, 25, 35, 45, node="n5")
+    ordered = sorted(lines, key=lambda ln: ln.host_time)
+    watch = SilenceWatch(["n2", "n5"], timedelta(seconds=60), at(0), at(400))
+
+    for line in ordered:
+        watch.feed(line)
+
+    streamed = [(c.node, c.start, c.end) for c in watch.causes()]
+    assert sorted(streamed) == sorted((c.node, c.start, c.end) for c in silence_causes(
+        lines, ["n2", "n5"], timedelta(seconds=60), at(0), at(400)))
+    assert ("n5", at(45), at(400)) in streamed and ("n2", at(20), at(320)) in streamed

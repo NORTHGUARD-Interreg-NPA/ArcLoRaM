@@ -1,6 +1,6 @@
 """The fleet: local ST-LINK boards and Pi Nodes behind the one interface bench already calls."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 from arclog.capture import DailyWriter
@@ -9,7 +9,7 @@ from bench.boards import capture_node, format_uid
 from bench.capture import capture_command
 from bench.config import Remote
 from bench.fleet import Fleet
-from bench.flash import discover, flash_nodes, select
+from bench.flash import discover, select
 from bench.pinode import PI_NODE
 from bench.programmer import Probe, ProgrammerError
 

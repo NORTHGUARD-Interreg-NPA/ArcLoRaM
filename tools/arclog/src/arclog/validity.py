@@ -7,12 +7,13 @@ Other evidence (the log collector) produces causes of the same shape; the caller
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
 from arclog.expect import Run, Spec
 from arclog.marks import Mark
 from arclog.model import Kind, Line
+from arclog.schema import Event
 
 #: Exit code of a run whose data cannot be used (`bench run`, `bench validate`, the collector judge), apart from
 #: pass (0), fail (1), timeout or no verdict yet (2) and an invalid scenario or argument (3).
@@ -111,35 +112,124 @@ def port_outages(marks: list[Mark]) -> list[tuple[str, datetime, datetime]]:
 _FIRMWARE_EVENTS = ("lost_lines", "unplanned_reboot", "wrong_build")
 
 
+class TraceAudit:
+    """Every firmware event that would fail the run (a reboot nobody planned, lost lines, a wrong Build ID), not
+    only the first: the engine's own rules, read to the end, one line at a time.
+
+    Lines come in time order. Past `max_failures` events are only counted (`dropped`), so a run of days with a
+    node that loses lines all the time costs a few kilobytes, not a list as long as the run.
+    """
+
+    def __init__(self, spec: Spec, since: datetime, events: dict[str, Event] | None = None,
+                 max_failures: int | None = 1000) -> None:
+        self.spec = spec
+        self.since = since
+        # Only the engine's own failures are read here: the expectations and forbids are the verdict's business,
+        # and with hundreds of them they would cost a pass of their own.
+        self._run = Run(replace(spec, expects=[], forbids=[]), since, keep_going=True, events=events,
+                        max_failures=max_failures)
+        self._boots: dict[str, _Boots] = {}
+
+    @property
+    def dropped(self) -> int:
+        return self._run.dropped
+
+    def feed(self, line: Line) -> None:
+        self._run.feed(line)
+        if self.spec.build is None or line.kind is not Kind.ARCLOG or line.event != "BOOT":
+            return
+        node = self.spec.nodes.get(line.node)
+        if node is None or not node.flashed or line.host_time is None:
+            return
+        if line.host_time < max(self.since, node.since or self.since):
+            return
+        boots = self._boots.setdefault(line.node, _Boots())
+        boots.last = line.get("build") or "(none)"
+        if line.get("build") == self.spec.build:
+            boots.cores.add(line.core)
+
+    def causes(self) -> list[Cause]:
+        found = [Cause(f.kind, f.reason, f.node, f.at, f.at, fault="firmware")
+                 for f in self._run.failures if f.kind in _FIRMWARE_EVENTS]
+        return found + self._never_booted()
+
+    def _never_booted(self) -> list[Cause]:
+        """A flashed board that never logged a BOOT of the expected build on both cores: the flash did not take."""
+        if self.spec.build is None:
+            return []
+        causes = []
+        for name, node in self.spec.nodes.items():
+            if not node.flashed:
+                continue
+            boots = self._boots.get(name, _Boots())
+            if boots.cores >= {"0", "4"}:
+                continue
+            last = f"last booted build={boots.last}" if boots.last is not None else "no BOOT line"
+            causes.append(Cause("wrong_build", f"{name} never booted build={self.spec.build} ({last})", name,
+                                fault="firmware"))
+        return causes
+
+
+@dataclass
+class _Boots:
+    cores: set[str] = field(default_factory=set)   # cores that booted the expected build
+    last: str | None = None                        # the build of the latest BOOT, whatever it was
+
+
 def trace_causes(spec: Spec, since: datetime, lines: list[Line]) -> list[Cause]:
     """Every firmware event that would fail the run (a reboot nobody planned, lost lines, a wrong Build ID), not
     only the first: the engine's own rules, read to the end."""
-    run = Run(spec, since, keep_going=True)
+    audit = TraceAudit(spec, since, max_failures=None)
     for line in sorted(lines, key=lambda ln: ln.host_time):
-        run.feed(line)
-    causes = [Cause(f.kind, f.reason, f.node, f.at, f.at, fault="firmware")
-              for f in run.failures if f.kind in _FIRMWARE_EVENTS]
-    return causes + _never_booted(spec, since, lines)
+        audit.feed(line)
+    return audit.causes()
 
 
-def _never_booted(spec: Spec, since: datetime, lines: list[Line]) -> list[Cause]:
-    """A flashed board that never logged a BOOT of the expected build on both cores: the flash did not take."""
-    if spec.build is None:
-        return []
-    causes = []
-    for name, node in spec.nodes.items():
-        if not node.flashed:
-            continue
-        start = max(since, node.since or since)
-        boots = [ln for ln in sorted(lines, key=lambda ln: ln.host_time)
-                 if ln.node == name and ln.kind is Kind.ARCLOG and ln.event == "BOOT"
-                 and ln.host_time is not None and ln.host_time >= start]
-        if {ln.core for ln in boots if ln.get("build") == spec.build} >= {"0", "4"}:
-            continue
-        last = f"last booted build={boots[-1].get('build') or '(none)'}" if boots else "no BOOT line"
-        causes.append(Cause("wrong_build", f"{name} never booted build={spec.build} ({last})", name,
-                            fault="firmware"))
-    return causes
+class SilenceWatch:
+    """A node that logged nothing for longer than `max_silence` with no capture gap in it has stopped: a node
+    fault. The lines come in time order, one at a time, and `causes()` closes the window.
+
+    Gaps are read between a node's lines, from its last line to `end`, and over the whole window for a node that
+    never logged. `outages` (node, from, to) are the capture's own (`port_outages`): a gap they touch is not the
+    node's.
+    """
+
+    def __init__(self, nodes: list[str], max_silence: timedelta, start: datetime, end: datetime,
+                 outages: list[tuple[str, datetime, datetime]] = ()) -> None:
+        self.max_silence = max_silence
+        self.start = start
+        self.end = end
+        self.outages = outages
+        self._last: dict[str, datetime | None] = {node: None for node in nodes}
+        self._causes: list[Cause] = []
+
+    def feed(self, line: Line) -> None:
+        t = line.host_time
+        if line.node not in self._last or t is None or not self.start <= t <= self.end:
+            return
+        before = self._last[line.node]
+        if before is not None:
+            self._gap(line.node, before, t)
+        self._last[line.node] = t
+
+    def causes(self) -> list[Cause]:
+        found = list(self._causes)
+        for node, last in self._last.items():
+            if last is None:
+                self._gap_into(found, node, self.start, self.end)
+            else:
+                self._gap_into(found, node, last, self.end)
+        return found
+
+    def _gap(self, node: str, before: datetime, after: datetime) -> None:
+        self._gap_into(self._causes, node, before, after)
+
+    def _gap_into(self, out: list[Cause], node: str, before: datetime, after: datetime) -> None:
+        if after - before > self.max_silence and not any(
+                n == node and down_from < after and down_to > before for n, down_from, down_to in self.outages):
+            out.append(Cause("node_silent", f"{node}: no line for {(after - before).total_seconds():.0f} s "
+                             f"({before:%H:%M:%S} - {after:%H:%M:%S} UTC) with no capture gap in it",
+                             node, before, after, fault="node"))
 
 
 def silence_causes(lines: list[Line], nodes: list[str], max_silence: timedelta, start: datetime, end: datetime,
@@ -150,15 +240,7 @@ def silence_causes(lines: list[Line], nodes: list[str], max_silence: timedelta, 
     never logged. `outages` (node, from, to) are the capture's own (`port_outages`): a gap they touch is not the
     node's.
     """
-    causes = []
-    for node in nodes:
-        times = sorted(ln.host_time for ln in lines
-                       if ln.node == node and ln.host_time is not None and start <= ln.host_time <= end)
-        gaps = list(zip(times, times[1:])) + [(times[-1], end)] if times else [(start, end)]
-        for before, after in gaps:
-            if after - before > max_silence and not any(
-                    n == node and down_from < after and down_to > before for n, down_from, down_to in outages):
-                causes.append(Cause("node_silent", f"{node}: no line for {(after - before).total_seconds():.0f} s "
-                                    f"({before:%H:%M:%S} - {after:%H:%M:%S} UTC) with no capture gap in it",
-                                    node, before, after, fault="node"))
-    return causes
+    watch = SilenceWatch(nodes, max_silence, start, end, outages)
+    for line in sorted((ln for ln in lines if ln.host_time is not None), key=lambda ln: ln.host_time):
+        watch.feed(line)
+    return sorted(watch.causes(), key=lambda c: (nodes.index(c.node), c.start))

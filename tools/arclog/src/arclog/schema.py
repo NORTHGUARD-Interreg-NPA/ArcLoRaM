@@ -7,6 +7,7 @@ so the firmware and this tool cannot silently disagree.
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass
 
 from arclog.model import Kind, Line
@@ -141,11 +142,14 @@ EVENTS: dict[str, Event] = {
 }
 
 
-def validate(line: Line) -> list[str]:
-    """Schema problems of an ARCLOG line (empty when valid or not ARCLOG)."""
+def validate(line: Line, events: dict[str, Event] | None = None) -> list[str]:
+    """Schema problems of an ARCLOG line (empty when valid or not ARCLOG).
+
+    `events` is the table of the build that wrote the line when it is not this checkout's (`events_from_source`).
+    """
     if line.kind is not Kind.ARCLOG:
         return []
-    ev = EVENTS.get(line.event)
+    ev = (EVENTS if events is None else events).get(line.event)
     if ev is None:
         return [f"unknown event {line.event}"]
     problems = []
@@ -169,3 +173,42 @@ def unregistered_board(uid: str) -> str:
     entry = ", ".join(f"0x{w.upper()}u" for w in words) if words else uid
     return (f"BOOT: board not registered, add {{ {{ {entry} }}, <next free id> }}, "
             "to Common/Protocol/node_id.c")
+
+
+def events_from_source(source: str) -> dict[str, Event]:
+    """The EVENTS table of a `schema.py` source, read as a syntax tree and never run.
+
+    A record is checked with the schema of the build that made it, not of the checkout that judges it
+    (`git show <build's commit>:tools/arclog/src/arclog/schema.py`). Only what `validate` reads is kept:
+    module, keys and optional keys; the docs are left out.
+    """
+    table = None
+    for node in ast.parse(source).body:
+        target = node.targets[0] if isinstance(node, ast.Assign) else getattr(node, "target", None)
+        if isinstance(target, ast.Name) and target.id == "EVENTS" and isinstance(node.value, ast.Dict):
+            table = node.value
+    if table is None:
+        raise ValueError("no EVENTS table in this schema source")
+    events = {}
+    for key, call in zip(table.keys, table.values):
+        name = ast.literal_eval(key)
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "Event"
+                and len(call.args) >= 2):
+            raise ValueError(f"{name}: not an Event(module, keys, ...) call")
+        optional = ast.literal_eval(call.args[3]) if len(call.args) > 3 else ()
+        for kw in call.keywords:
+            if kw.arg == "optional":
+                optional = ast.literal_eval(kw.value)
+        events[name] = Event(ast.literal_eval(call.args[0]), tuple(ast.literal_eval(call.args[1])), "",
+                             tuple(optional))
+    return events
+
+
+def events_to_dict(events: dict[str, Event]) -> dict[str, dict]:
+    """A table as plain data (a record keeps it as JSON next to its lines)."""
+    return {name: {"mod": ev.mod, "keys": list(ev.keys), "optional": list(ev.optional)}
+            for name, ev in events.items()}
+
+
+def events_from_dict(data: dict[str, dict]) -> dict[str, Event]:
+    return {name: Event(d["mod"], tuple(d["keys"]), "", tuple(d.get("optional", ()))) for name, d in data.items()}

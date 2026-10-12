@@ -25,6 +25,8 @@ packages = ["src/bench"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not scale'"
+markers = ["scale: a record of days (10 nodes over 72 h), about a minute; `pytest -m scale`"]
 
 [tool.uv.sources]
 arclog = { path = "../arclog", editable = true }

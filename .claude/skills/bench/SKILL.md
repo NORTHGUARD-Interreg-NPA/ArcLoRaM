@@ -80,6 +80,25 @@ Option bytes, OTP, readout protection, security and mass erase are out of reach 
 The bench capture writes every board's trace to `tools/arclog/runs/bench/<node>-YYYYMMDD.log` (UTC days; `<node>` is the COM port or a Pi Node's name; in a worktree that path leads to the main checkout's shared folder).
 Read those files directly, by polling (`tail`, `grep`, `arclog view`), or check a live condition with `uv run --project tools/arclog arclog expect <file> --dir tools/arclog/runs/bench --since <UTC time> --follow`.
 
+## Runs decided from the log collector
+
+A run of hours or of days is not watched: `bench flash` arms the boards, the Pi Nodes keep running, and the log collector keeps the record.
+The URL of the collector is private (a tailnet name): pass it as `BENCH_COLLECTOR_URL` for the command, never write it in a file of the repo.
+Decide the run with the judge, which pulls the collector's lines into the run folder and judges the folder (`tools/bench/README.md`, "Judging from the log collector"):
+
+```sh
+BENCH_COLLECTOR_URL=<base URL> uv run --project tools/bench python -I -m bench.collector <scenario.toml> \
+  --build <Build ID> --since <UTC time before the flash> --node 2=nuna-node-03 --node 5=nuna-node-01 \
+  --dir tools/arclog/runs/<start>-<build>-collector
+```
+
+- **Decide from the summary, and only the summary.** The judge prints a fixed number of lines whatever the length of the run and the number of nodes: the verdict, one line per node, the first causes, the record line. Do not open the raw record, the capture files or `judge.log` to look for the verdict, and never print the stage lines; `--verbose` is for a person.
+- Exit 0 pass, 1 fail, 2 no verdict yet (come back later), 3 a bad argument or a collector that cannot be reached, 4 the record is invalid. An exit 4 is no verdict on the firmware: read its causes (`INVALID the record is not whole` means the export or the collector, not the nodes), put them in the Runs row and pull again or run again.
+- A `FAIL` names the node, the line and the time: read that node's lines in a window of a minute around that time (`grep` or `arclog view` on the capture file of the folder), not the file.
+- Each run has its own folder: the pull refuses a folder of another build, an earlier start, or one that was not made by a pull. When a folder holds two runs of the same nodes, pass `--until`.
+- The judge reads the record with the schema of the build that made it (the folder keeps it): do not "fix" a `missing` or `unknown` field by editing the checkout's schema when the record names an older one.
+- Nothing here touches a board: the pull and the judge only read the collector, so they may run while another session holds the boards.
+
 ## Pi Node login (TEMPORARY, plaintext)
 
 This file is tracked in the public repo: Simon chose on 2026-10-06 to commit and push the login anyway, and will secure it later.

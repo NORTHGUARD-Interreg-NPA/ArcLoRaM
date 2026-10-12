@@ -4,7 +4,7 @@ from datetime import timedelta
 
 from test_expect import SINCE, UID, Trace, spec
 
-from arclog.validity import trace_causes
+from arclog.validity import TraceAudit, trace_causes
 
 
 def at(seconds: float):
@@ -90,3 +90,17 @@ def test_a_board_that_booted_it_on_both_cores_is_not_a_wrong_build_and_a_watched
     t.idle(5, "n3")
 
     assert causes(t, nodes={"n2": {}, "n3": {"flashed": False}}) == []
+
+
+def test_a_run_of_days_with_a_node_losing_lines_all_the_time_keeps_a_bounded_list():
+    t = Trace()
+    t.boot(1, "n2")
+    for i in range(50):
+        t.emit(5 + i, "n2", "0", "INIT_DONE", skip=2, phases=3)
+    audit = TraceAudit(spec(), SINCE, max_failures=10)
+
+    for line in t.lines:
+        audit.feed(line)
+
+    assert len([c for c in audit.causes() if c.kind == "lost_lines"]) == 10
+    assert audit.dropped == 40

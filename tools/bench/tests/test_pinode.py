@@ -127,7 +127,7 @@ def images(tmp_path):
 
 
 def flash_out(matched=2, extra=""):
-    sections = "\n".join(f"Section .text, range 0x8000000 -- 0x8000100: matched." for _ in range(matched))
+    sections = "\n".join("Section .text, range 0x8000000 -- 0x8000100: matched." for _ in range(matched))
     return f"Loading section .isr_vector, size 0x100 lma 0x8000000\nStart address 0x8000000, load size 256\n{sections}\n{extra}"
 
 
