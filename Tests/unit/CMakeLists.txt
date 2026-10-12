@@ -43,6 +43,7 @@ macro(add_unity_test TEST_NAME)
         ${CMAKE_SOURCE_DIR}/../CM0PLUS/SubGHz_Phy/Logic
         ${CMAKE_SOURCE_DIR}/../Common/SharedMemory
         ${CMAKE_SOURCE_DIR}/../Common/Protocol
+        ${CMAKE_SOURCE_DIR}/../Common/Log
     )
 
     # Register with CTest — running "ctest" will execute this binary
@@ -131,6 +132,16 @@ target_compile_definitions(test_probe PRIVATE BENCH_PROBE)
 add_unity_test(test_probe_off
     test_probe.c
     ../../Common/Log/probe.c
+)
+
+# The crash record of a core and the reset cause of BOOT (#101): pure modules, the fault
+# handlers and the RCC read that feed them are target glue (Common/Log/core_fault.c).
+add_unity_test(test_core_crash
+    test_core_crash.c
+)
+
+add_unity_test(test_reset_cause
+    test_reset_cause.c
 )
 
 add_unity_test(test_sync_stamp

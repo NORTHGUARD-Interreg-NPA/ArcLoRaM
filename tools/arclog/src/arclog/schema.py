@@ -28,8 +28,34 @@ EVENTS: dict[str, Event] = {
         (),
         "Core booted, with the Build ID (\"dev\" outside the bench, see "
         "Common/Bench/bench_config.h). CM0+ adds node class, Node ID "
-        "(0 = board not registered), MCU unique ID (w0 w1 w2) and firmware version, Build ID and Sync profile (sync_profile.h: BRINGUP, DEV or PROD).",
-        ("cls", "id", "uid", "fw", "build", "sync"),
+        "(0 = board not registered), MCU unique ID (w0 w1 w2) and firmware version, Build ID and Sync profile (sync_profile.h: BRINGUP, DEV or PROD). "
+        "Both cores add why the MCU last reset: rst = power, pin, soft, iwdg, wwdg, lpwr, obl or none, "
+        "and rsf = the RCC_CSR reset flags the CM4 read and cleared at this boot (#101, Common/Log/reset_cause.h).",
+        ("cls", "id", "uid", "fw", "build", "sync", "rst", "rsf"),
+    ),
+    "CORE_CRASH": Event(
+        "S",
+        ("core", "kind", "why", "pc", "lr", "xpsr", "sp", "exc", "again"),
+        "A core left a crash record at its last fault and reports it at this boot (#101, Common/Log/core_fault.c). "
+        "core = cm4 or cm0; kind = the handler (hard, bus, mem, usage, nmi); why = the cause from the CM4 fault status "
+        "(ibuserr, preciserr, undefinstr, forced... or na on the CM0+, which has no status registers); pc, lr, xpsr = the "
+        "frame the hardware stacked; sp = the stack pointer before the exception; exc = EXC_RETURN; again = faults after the first, "
+        "which the record did not keep.",
+    ),
+    "CORE_CRASH_SCB": Event(
+        "S",
+        ("core", "cfsr", "hfsr", "bfar", "mmfar", "icsr", "shcsr"),
+        "The CM4 fault status registers of the crash record (the CM0+ has none).",
+    ),
+    "CORE_CRASH_REGS": Event(
+        "S",
+        ("core", "r0", "r1", "r2", "r3", "r12"),
+        "The registers of the frame stacked at the fault of the crash record.",
+    ),
+    "CORE_CRASH_STK": Event(
+        "S",
+        ("core", "w0", "w1", "w2", "w3", "w4", "w5", "w6", "w7"),
+        "The 8 words of stack just above the frame at the fault: return addresses to read a backtrace from.",
     ),
     "PROBE": Event(
         "S", ("tag", "seg", "us", "hz"),

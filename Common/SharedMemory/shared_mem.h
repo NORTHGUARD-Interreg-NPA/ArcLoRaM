@@ -22,6 +22,7 @@
 
 #include <stdint.h>
 #include "protocol_types.h"
+#include "core_crash.h"
 
 /* =========================================================================
  * Ownership conventions
@@ -265,7 +266,16 @@ typedef struct {
  *   g_emergency_alert_slot       +0x020   12 B   CM0+ -> CM4
  *   g_freq_resolver_state        +0x02C  400 B   CM4 -> CM0+
  *   g_freq_override_tables       +0x1BC  640 B   CM4 -> CM0+
- *   (total: 1088 B; ~3008 B remain reserved for future buffers)
+ *   g_core_crash_cm0                     108 B   CM0+ fault handler -> CM0+ BOOT
+ *   g_core_crash_cm4                     108 B   CM4 fault handler -> CM4 BOOT
+ *   g_reset_flags                          4 B   CM4 -> CM0+
+ *   (total: about 1.3 KB; the rest remains reserved for future buffers)
+ *
+ * The last three survive a reset on purpose, and SharedMem_Init() leaves them
+ * alone (#101): a crash record that boot zeroed would report nothing, and the
+ * reset flags are written by the CM4 before it releases the CM0+. SRAM keeps
+ * its content through every reset but a power-up, so each is checked before it
+ * is believed (the record by its magic and check word).
  * ========================================================================= */
 
 extern AlarmBRequest_t          g_alarm_b_request;      /*!< CM4 writes, CM0+ reads. */
@@ -274,9 +284,16 @@ extern uint32_t                 g_cm4_heartbeat;        /*!< Incremented by CM4 
 extern EmergencyAlertSlot_t     g_emergency_alert_slot; /*!< CM0+ populates on CM4 liveness failure. */
 extern FrequencyResolverState_t g_freq_resolver_state;  /*!< CM4 writes at boot, CM0+ reads per slot. */
 extern uint32_t g_freq_override_tables[FREQ_MAX_OVERRIDE_TABLES][FREQ_MAX_CELLS_PER_PHASE]; /*!< CM4 writes, CM0+ reads per OVERRIDE cell. */
+extern CoreCrash_t              g_core_crash_cm0;       /*!< The CM0+ fault handler writes; the CM0+ reports it at its next BOOT and clears it. */
+extern CoreCrash_t              g_core_crash_cm4;       /*!< The CM4 fault handler writes; the CM4 reports it at its next BOOT and clears it. */
+extern uint32_t                 g_reset_flags;          /*!< RCC_CSR reset flags, read and cleared by the CM4 at every boot; the CM0+ prints them. */
+#if defined(BENCH_FAULT_CM4) || defined(BENCH_FAULT_CM0)
+extern uint32_t                 g_bench_fault_gate[2];  /*!< Build Override test only: [0] CM0+, [1] CM4 forced a fault, so the restart does not force it again. */
+#endif
 
 /*!
- * \brief   Zero-initialise the entire SHARED_APP region.
+ * \brief   Zero-initialise the SHARED_APP region, bar the crash records and
+ *          the reset flags, which are meant to survive a reset.
  *
  * \details Called ONCE by CM0+ at the start of \c SubGhzPhyTask_Init().
  *          Must run before any shared-memory read or write on either core.

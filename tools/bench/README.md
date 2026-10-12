@@ -393,6 +393,9 @@ The strategy is that of the Lavish editor (a page opens, the user answers in it,
 
 Agents work in parallel worktrees and share the boards (ADR-0003).
 Each worktree has its own Build Tree, and the capture and the run records are shared, in the main checkout.
+A Build Tree follows its worktree: `arcfw-bench-<worktree>` is deleted once no worktree has that name.
+Git runs nothing when a worktree is removed, so `bench prune` does it (`--dry-run` lists the trees first), and so does every command that builds (`build`, `flash`, `run`), which prints each tree it removes.
+Only folders of the default layout that hold bench's own folders (`tree`, `workspace`, `logs`) are touched, never a tree chosen with `--root`, and never one whose `owner` file names another clone of the repository.
 A board has one writer at a time:
 
 - `flash`, `reset`, a UID read over SWD and `run` hold a lease on each board they flash or reset until they end; a run only watching a board holds a shared lease on it.
@@ -508,6 +511,7 @@ Commands:
 | Command | Does |
 |---|---|
 | `bench build` | Syncs the working tree to the Build Tree and builds the configurations a run needs |
+| `bench prune` | Removes the Build Trees of worktrees that no longer exist (`--dry-run` lists them); a build does it too |
 | `bench flash` | Flashes both cores of the named boards from one build, then resets them |
 | `bench run <scenario>` | Build, flash, arm, fire the scheduled actions, check the expectations, report |
 | `bench reset <node>` | Resets or halts/resumes a board without flashing |

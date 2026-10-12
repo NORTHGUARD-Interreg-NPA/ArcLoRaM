@@ -27,6 +27,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "sys_app.h"
+#include "core_fault.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -69,7 +70,10 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+  /* First thing after a reset: keep the reset flags for the CM0+ and clear them, then name
+   * the faults (Common/Log/core_fault.h, #101). */
+  CoreFault_CaptureResetCause();
+  CoreFault_Init();
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -125,7 +129,7 @@ int main(void)
     MX_SubGHz_Phy_Process();
 
     /* USER CODE BEGIN 3 */
-
+    CoreFault_BenchPoll();
   }
   /* USER CODE END 3 */
 }

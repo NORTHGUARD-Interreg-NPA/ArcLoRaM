@@ -42,7 +42,7 @@ Committing, pushing and landing on `main` happen when Simon asks; the recap says
 Leave the repository as it was found, plus the landed work.
 Before the recap, remove what this session created:
 
-- Its worktree (`git worktree remove`, after unlinking the `tools/arclog/runs` symlink there) and its local branches, once merged (`git branch -d`).
+- Its worktree (`git worktree remove`, after unlinking the `tools/arclog/runs` symlink there), then its Build Tree (`bench prune`), and its local branches, once merged (`git branch -d`).
 - Its remote branches, once merged (`git push origin --delete <branch>`).
 - Its stash entries, scratch files in the repo, servers and background commands.
 - The always-on bench capture is infrastructure: it keeps running, and the recap says so.

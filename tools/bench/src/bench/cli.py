@@ -11,7 +11,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from bench.lease import Held, Leases
-from bench.session import RUNS, default_root, ensure_runs_link, lease_dir, shared_root, worktree_name
+from bench.session import (RUNS, default_root, ensure_runs_link, lease_dir, prune_trees, shared_root,
+                           worktree_name)
 from bench.tree import BuildTree
 
 DEFAULT_ROOT = "/mnt/c/Users/Simon/arcfw-bench"
@@ -44,6 +45,36 @@ def _windows(path: Path) -> str:
 def _root(args: argparse.Namespace, repo: Path) -> Path:
     """The Build Tree root: --root / $BENCH_ROOT, else one per worktree (a build rewrites the tree)."""
     return Path(args.root) if args.root else default_root(repo, Path(DEFAULT_ROOT))
+
+
+def _sweep(args: argparse.Namespace, repo: Path) -> None:
+    """A Build Tree follows its worktree: the trees of worktrees that were removed go when a command builds (git runs
+    nothing when a worktree is removed, and `bench prune` does it on demand). Never fails the command, and leaves the
+    default layout alone when the Build Tree was chosen by hand."""
+    if args.root:
+        return
+    try:
+        done, failed = prune_trees(repo, Path(DEFAULT_ROOT))
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"bench: Build Tree sweep skipped: {exc}", file=sys.stderr)
+        return
+    for folder in done:
+        print(f"pruned the Build Tree of a removed worktree: {folder.name}")
+    for folder, why in failed:
+        print(f"bench: cannot remove the Build Tree {folder.name}: {why}", file=sys.stderr)
+
+
+def cmd_prune(args: argparse.Namespace) -> int:
+    repo = Path(args.repo) if args.repo else find_repo(Path.cwd())
+    done, failed = prune_trees(repo, Path(DEFAULT_ROOT), dry_run=args.dry_run)
+    verb = "would remove" if args.dry_run else "removed"
+    for folder in done:
+        print(f"{verb} the Build Tree of a removed worktree: {folder.name}")
+    for folder, why in failed:
+        print(f"bench prune: cannot remove {folder.name}: {why}", file=sys.stderr)
+    if not done and not failed:
+        print("no Build Tree to prune")
+    return 1 if failed else 0
 
 
 def _leases(repo: Path, args: argparse.Namespace) -> Leases:
@@ -104,6 +135,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     from bench.build import build
 
     repo = Path(args.repo) if args.repo else find_repo(Path.cwd())
+    _sweep(args, repo)
     bt = BuildTree(_root(args, repo))
     overrides = dict(args.define or [])
     try:
@@ -385,6 +417,7 @@ def cmd_flash(args: argparse.Namespace) -> int:
             _, done = capture.up(present, required=[b.port for b in boards.values() if b.port])
             print(f"capture {done}: {', '.join(p for p in present if p not in capture.left_alone)}"
                   + (f" ({', '.join(capture.left_alone)} stay with another capture)" if capture.left_alone else ""))
+            _sweep(args, repo)
             result = build(repo, BuildTree(_root(args, repo)), sorted(set(assignments.values())),
                            dict(args.define or []), windows=_windows)
             if not result.ok:
@@ -496,6 +529,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             _, done = capture.up(present, required=[b.port for b in boards.values() if b.port])
             print(f"capture {done}: {', '.join(p for p in present if p not in capture.left_alone)}"
                   + (f" ({', '.join(capture.left_alone)} stay with another capture)" if capture.left_alone else ""))
+            _sweep(args, repo)
             result = build(repo, BuildTree(_root(args, repo)), sorted(set(s.flashed.values())), s.overrides,
                            windows=_windows)
             if not result.ok:
@@ -739,6 +773,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="also read each acceptance record's issue with `gh`: its criteria are the record's, word for "
                          "word, and a closed issue has them all ticked")
     rc.set_defaults(func=cmd_records)
+
+    pr = sub.add_parser("prune", help="remove the Build Trees of worktrees that no longer exist (a build does it "
+                                      "too); the default layout only, never a --root; exit 1 if one stays")
+    pr.add_argument("--dry-run", action="store_true", help="say which Build Trees would go, remove none")
+    pr.set_defaults(func=cmd_prune)
 
     r = sub.add_parser("reset", help="reset boards (no flash)")
     r.add_argument("node_ids", nargs="+", type=int, metavar="NODE_ID")
