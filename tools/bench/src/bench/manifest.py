@@ -102,7 +102,7 @@ class Host:
 _BUILD_PART = re.compile(r"^(?P<dirty>d[0-9a-f]{6})$|^(?P<overrides>o[0-9a-f]{6})$")
 
 
-def _firmware_commit(build_id: str) -> tuple[str, bool]:
+def firmware_commit(build_id: str) -> tuple[str, bool]:
     """(commit, dirty) of a Build ID `<hash>[-d<hash>][-o<hash>]`."""
     commit, *rest = build_id.split("-")
     return commit, any(_BUILD_PART.match(part) and part.startswith("d") for part in rest)
@@ -112,7 +112,7 @@ def start_manifest(*, command: str, worktree: str, bench_commit: str, build_id: 
                    boards: dict[int, Board], others: list[Board], started: datetime,
                    flashed: dict[int, datetime], host: Host) -> dict:
     """What is known when a run is armed. Never a Pi Node's address: a manifest is committed with its dataset."""
-    commit, dirty = _firmware_commit(build_id)
+    commit, dirty = firmware_commit(build_id)
     run: dict = {"command": command, "worktree": worktree, "bench_commit": bench_commit, "build_id": build_id,
                  "firmware_commit": commit, "firmware_dirty": dirty, "overrides": dict(scenario.overrides),
                  "scenario": "scenario.toml", "dataset": scenario.dataset}
