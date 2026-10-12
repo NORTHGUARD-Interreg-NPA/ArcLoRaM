@@ -407,7 +407,7 @@ A board lease keeps two sessions off one board; it says nothing about the air.
 Two runs on disjoint boards still hear each other on one channel, a C2 locks to whichever C3 it hears first, and an idle board keeps sending the Sync of its last image.
 So a run has a channel of its own (issue #85).
 
-- **The plan** is in the firmware, `Common/Protocol/channel_plan.h`, and bench reads it from there: channels on a 100 kHz raster from 865.1 to 868.5 MHz (the 1 % / 25 mW sub-bands), 868.3 MHz by default, and 869.5 MHz (the 10 % / 500 mW one), and two sessions **1 MHz apart** at least (the Semtech SX1261/2 summary gives 88 dB of blocking immunity at 1 MHz; no figure was found for a closer offset).
+- **The plan** is in the firmware, `Common/Protocol/channel_plan.h`, and bench reads it from there: channels on a 100 kHz raster from 865.1 to 868.5 MHz (the 1 % / 25 mW sub-bands), 868.3 MHz by default, and 869.5 MHz (the 10 % / 500 mW one), and two sessions **1 MHz apart** at least (the Semtech SX1261/2 summary gives 88 dB of blocking immunity at 1 MHz; no figure was found for a closer offset). **That is not enough for a very weak link**: a far indoor link measured at about -125 dBm lost every packet that a neighbour a few metres away, 1.2 MHz off, was transmitting over (`docs/test-tracker/spot-20261012-node4-link.md`; open question: #130 "Channel separation").
   Five channels fit together: 865.3, 866.3, 867.3, 868.3 and 869.5 MHz.
 - **A run moves to another channel** with the Build Override `FREQ_DEFAULT_HZ` (`[overrides] FREQ_DEFAULT_HZ = "867300000u"` or `-D FREQ_DEFAULT_HZ=867300000u`).
   Every phase takes it (the discovery channel and the fallback too), all boards of the run get it, and the Build ID carries it.

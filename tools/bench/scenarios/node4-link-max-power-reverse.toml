@@ -1,0 +1,47 @@
+# Purpose: spontaneous. Test Record docs/test-tracker/spot-20261012-node4-link.md.
+# Claim (node4-link-max-power.toml the other way round): a C2 on the default site receives the Sync of
+# nuna-node-04 (remote site) when nuna-node-04 is the C3 and transmits at 22 dBm, the high-power
+# amplifier of the NUCLEO-WL55JC1, on 869.5 MHz (ETSI sub-band P: 10 % duty cycle, 500 mW ERP; the build
+# refuses more than 14 dBm on any other channel, channel_plan.h). 869.5 MHz is 1.2 MHz from the desk
+# channel 868.3 MHz. Same overrides and same two sites as node4-link-max-power.toml, so the two results
+# are one link measured in both directions.
+# A template like node4-link-max-power.toml: node 0 is the C2 on the default site, aimed with
+# `--as <Node ID>`. The C3 is flashed first, so its boot burst (cells 0 to 4, 20 s apart) falls while
+# the C2 boots.
+description = "A C2 on the default site receives nuna-node-04 (remote site) at 22 dBm on 869.5 MHz"
+timeout = "24m"
+
+[nodes]
+4 = "C3"
+0 = "C2"
+
+[overrides]
+SYNC_BOOT_BURST = "5u"
+FREQ_DEFAULT_HZ = "869500000u"
+RADIO_TX_POWER_DBM = "22"
+
+[[expect]]
+node = 4
+event = "SYNC_TX"
+where = { freq = 869500000 }
+within = "2m"
+
+[[expect]]
+node = 0
+event = "RX_DONE"
+within = "3m"
+
+[[expect]]
+node = 0
+event = "RX_DONE"
+count = 10
+within = "21m"
+
+# The Compliance Engine grants 22 dBm on this channel (a TX_DENIED would carry the engine's result, POWER_TOO_HIGH if it refused the power).
+[[forbid]]
+event = "TX_DENIED"
+
+[[forbid]]
+node = 4
+event = "SYNC_TX"
+where = { freq = 868300000 }

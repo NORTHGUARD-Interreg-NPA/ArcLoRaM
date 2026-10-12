@@ -30,10 +30,16 @@
  *                in the plan (\ref CHANNEL_HIGH_POWER_HZ, below).
  *              - Channels of two sessions are CHANNEL_SPACING_HZ apart. The
  *                Semtech SX1261/2 summary gives 88 dB of blocking immunity at a
- *                1 MHz offset; the widest gap on the bench, a desk node at about
- *                -28 dBm next to a far link assumed at -90 dBm, is 62 dB. No figure
- *                was found for a closer offset, so nothing closer is claimed:
- *                865.3, 866.3, 867.3 and 868.3 MHz are four channels.
+ *                1 MHz offset. That holds for links of ordinary strength (a desk node
+ *                at about -30 dBm next to a signal of -90 dBm is a gap of 60 dB). It does
+ *                NOT hold for a far indoor link: measured on 2026-10-12 (docs/test-tracker/
+ *                spot-20261012-node4-link.md) the signal of a 306 m link is about -125 dBm,
+ *                a neighbour a few metres away at -32 dBm is 93 dB above it, and the four
+ *                packets sent while that neighbour transmitted 1.2 MHz away were all lost,
+ *                the five that were not were all heard. A link that weak needs more than
+ *                1 MHz from the neighbours' channels, or its packets away in time from theirs
+ *                (open question: #130 "Channel separation"). No figure was found for a closer offset than 1 MHz
+ *                either: 865.3, 866.3, 867.3 and 868.3 MHz are four channels.
  *
  *            Power follows the channel. The 25 mW (14 dBm) of the sub-bands above is the
  *            limit of every channel of the plan but one: 869.5 MHz, the middle of
