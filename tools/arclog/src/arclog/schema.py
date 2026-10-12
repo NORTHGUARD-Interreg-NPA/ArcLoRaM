@@ -42,6 +42,17 @@ EVENTS: dict[str, Event] = {
         "frame the hardware stacked; sp = the stack pointer before the exception; exc = EXC_RETURN; again = faults after the first, "
         "which the record did not keep.",
     ),
+    "CORE_STATE": Event(
+        "S",
+        ("core", "st", "cp", "step", "hb", "kept", "seq", "due"),
+        "Liveness of a core (#101, Common/Log/core_state.h). st=boot: the state the previous run of this core left, printed "
+        "after its BOOT (cp = the last checkpoint, step = the last one that is not a trace call or a sleep, hb = wakes, "
+        "kept = promised wakes served, seq = checkpoints, due = the wake it promised in ms, -1 for none). st=overdue: "
+        "printed by the CM4 about the CM0+ when it has served no promised wake for longer than the wake it promised plus a "
+        "margin (silent = the CM4's measure of that time in ms, over = silent minus due, alive = 1 when the heartbeat still "
+        "moves: a live core that lost a wake, 0 for a core that stopped).",
+        ("silent", "over", "alive"),
+    ),
     "CORE_CRASH_SCB": Event(
         "S",
         ("core", "cfsr", "hfsr", "bfar", "mmfar", "icsr", "shcsr"),

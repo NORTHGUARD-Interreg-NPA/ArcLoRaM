@@ -25,6 +25,7 @@
 #include "arclog.h"
 #include "day_ms.h"
 #include "probe.h"               /* PROBE_* (BENCH_PROBE only) */
+#include "core_cp.h"              /* CORE_CP: checkpoints of the slot task (#101); empty in host tests */
 #include <stddef.h>
 #include <string.h>
 
@@ -457,6 +458,9 @@ void TdmaMachine_SlotTask(void)
     uint32_t       next_start_ms;
     uint32_t       alarm_ms;
 
+    CORE_CP(CP_CM0_SLOT_IN);
+    CORE_KEPT();
+
     /* Stale wake: the chain stopped (radio ISR entered scanning) while this
      * alarm's task was pending. Leave the scanning radio alone. */
     if (!s_running) return;
@@ -543,6 +547,7 @@ void TdmaMachine_SlotTask(void)
 
     /* ---- Step 7: MAC decision ---- */
     decision = MAC_OnSlotOpportunity(&s_cursor, phase, s_slot_start_ms);
+    CORE_CP(CP_CM0_MAC_DONE);
     PROBE_MARK(slot, "dec");
     /* wake = actual minus programmed wake time: local timing deviation. */
     ARCLOG(ARCLOG_MOD_TDMA, VLEVEL_H, "SLOT",

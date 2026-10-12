@@ -97,6 +97,8 @@ int  ArcLog_CaptureEmit(uint32_t vlevel, const char *fmt, ...);
 
 #endif
 
+#include "core_cp.h"   /* CORE_CP_LOG_IN / OUT: where a core stalled in its trace path (#101); empty in host tests */
+
 /* =========================================================================
  * Emit macro
  * ========================================================================= */
@@ -117,9 +119,11 @@ int  ArcLog_CaptureEmit(uint32_t vlevel, const char *fmt, ...);
 #define ARCLOG(mod, vl, event, fmt, ...)                                      \
     do {                                                                      \
         if (ArcLog_Enabled(vl)) {                                             \
+            CORE_CP_LOG_IN();                                                 \
             (void)ARCLOG_BACKEND((vl), "%c%c %c #%02x " event " " fmt "\r\n", \
                                  ARCLOG_CORE, (mod), ArcLog_LevelChar(vl),    \
                                  (unsigned)ArcLog_NextSeq(), ##__VA_ARGS__);  \
+            CORE_CP_LOG_OUT();                                                \
         }                                                                     \
     } while (0)
 

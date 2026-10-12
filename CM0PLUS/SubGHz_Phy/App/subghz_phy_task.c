@@ -46,6 +46,9 @@
 #include "probe.h"               /* PROBE_* (BENCH_PROBE only) */
 #include "node_id.h"          /* NodeId_ReadUid, NodeId_FromUid */
 #include "core_fault.h"       /* the reset cause the CM4 kept, the crash record (#101) */
+#include "core_state_glue.h"  /* the previous run's state at BOOT (#101) */
+#include "core_cp.h"          /* CORE_CP, CORE_PROMISE: checkpoints and the promised wake (#101) */
+#include "day_ms.h"           /* DayMs_Diff */
 
 /* =========================================================================
  * Radio IRQ timestamps
@@ -105,6 +108,7 @@ static uint32_t plat_rx_back_ticks(uint8_t len, uint32_t *toa_ms);
 
 void SubGhzPhyTask_OnRadioIrq(void)
 {
+    CORE_CP(CP_CM0_IRQ_RADIO);
     /* One RTC read in ticks; the ms of the log and the diagnostics are its
      * floor (the same value GetTimerTicks gives). */
     uint32_t ticks = TIMER_IF_GetDayTicks(false);
@@ -222,6 +226,13 @@ static uint32_t plat_get_rtc_ms(void)
  */
 static void plat_program_alarm_a(uint32_t abs_ms)
 {
+    /* The wake this core promises, as a duration: the survivor judges a silence against it (core_state.h). */
+    int32_t wake_in = DayMs_Diff(abs_ms, plat_get_rtc_ms());
+    CORE_PROMISE(wake_in > 0 ? (uint32_t)wake_in : 0u);
+    CORE_CP(CP_CM0_ALARM_SET);
+    if (CoreFault_BenchSkipAlarm()) {
+        return;   /* Build Override BENCH_SKIP_ALARM: a lost wake, the promise made and the alarm not programmed */
+    }
     uint32_t target_s   = (abs_ms / 1000u) % 86400u;
     uint32_t target_ms  = abs_ms % 1000u;
     uint32_t target_ssr = RTC_PREDIV_S
@@ -285,8 +296,10 @@ static void plat_radio_set_rx(uint32_t start_window_ms, uint32_t cap_ms)
     if (tmo_ms > RX_HW_TIMEOUT_MAX_MS) {
         tmo_ms = RX_HW_TIMEOUT_MAX_MS;
     }
+    CORE_CP(CP_CM0_RX_SET);
     radio_rx_start(tmo_ms << 6);  /* 64 steps of 15.625 us per ms */
     UTIL_TIMER_StartWithPeriod(&s_rx_cap_timer, cap_ms);
+    CORE_CP(CP_CM0_RX_ARMED);
 }
 
 /* Scanning: listen until a reception ends; TdmaMachine_OnRxEnd re-arms. */
@@ -325,6 +338,8 @@ static void plat_wait_until_ms(uint32_t abs_ms)
 
 static void plat_cancel_alarm_a(void)
 {
+    CORE_PROMISE(CORE_STATE_NO_PROMISE);
+    CORE_CP(CP_CM0_ALARM_SET);
     hrtc.IsEnabled.RtcFeatures = UINT32_MAX;
     HAL_RTC_DeactivateAlarm(&hrtc, RTC_ALARM_A);
 }
@@ -761,6 +776,31 @@ void HAL_RTC_AlarmAEventCallback(RTC_HandleTypeDef *hrtc_arg)
  * Public API
  * ========================================================================= */
 
+#ifdef BENCH_PROBE
+/* Cost of the liveness record (#101, timing-probe): what a checkpoint, a heartbeat, a read of the tick
+ * and a read of the RTC cost on the CM0+, in a loop of 100 or 10 each (the SysTick of the probe counts
+ * cycles, so one call is far below its resolution). The state is started again afterwards. */
+static void core_state_cost_probe(void)
+{
+    volatile uint32_t sink = 0u;
+    PROBE_START(p);
+    for (int i = 0; i < 100; i++) { __asm volatile (""); }
+    PROBE_MARK(p, "loop_x100");
+    for (int i = 0; i < 100; i++) { CORE_CP(CP_CM0_RX_SET); }
+    PROBE_MARK(p, "cp_x100");
+    for (int i = 0; i < 100; i++) { CORE_BEAT(); }
+    PROBE_MARK(p, "beat_x100");
+    for (int i = 0; i < 10; i++) { sink = HAL_GetTick(); }
+    PROBE_MARK(p, "tick_x10");
+    for (int i = 0; i < 10; i++) { sink = plat_get_rtc_ms(); }
+    PROBE_MARK(p, "rtc_x10");
+    for (int i = 0; i < 10; i++) { sink = (uint32_t)DayMs_Diff(sink, plat_get_rtc_ms()); }
+    PROBE_MARK(p, "promise_x10");
+    PROBE_LOG(p, "core_state");
+    CoreState_Init(&CORE_STATE_SELF);
+}
+#endif
+
 void SubGhzPhyTask_Init(void)
 {
     /* 0. Zero the inter-core SRAM2 shared region before any machine touches it.
@@ -777,6 +817,10 @@ void SubGhzPhyTask_Init(void)
            (unsigned)APP_VERSION_SUB2, BENCH_BUILD_ID, SYNC_PROFILE_NAME,
            CoreFault_ResetName(), (unsigned)CoreFault_ResetFlags());
     CoreFault_ReportAtBoot();
+    CoreStateBoot_Report();
+#ifdef BENCH_PROBE
+    core_state_cost_probe();
+#endif
 
     /* 1. Radio — must be initialised before any UTIL_TIMER usage.
      *    TxTimeoutTimer and RxTimeoutTimer inside the radio driver are created

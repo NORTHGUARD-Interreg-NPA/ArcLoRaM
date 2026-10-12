@@ -23,6 +23,7 @@
 #include <stdint.h>
 #include "protocol_types.h"
 #include "core_crash.h"
+#include "core_state.h"
 
 /* =========================================================================
  * Ownership conventions
@@ -269,6 +270,8 @@ typedef struct {
  *   g_core_crash_cm0                     108 B   CM0+ fault handler -> CM0+ BOOT
  *   g_core_crash_cm4                     108 B   CM4 fault handler -> CM4 BOOT
  *   g_reset_flags                          4 B   CM4 -> CM0+
+ *   g_core_state_cm0                      24 B   CM0+ -> CM4 (the survivor's look)
+ *   g_core_state_cm4                      24 B   CM4 -> CM0+
  *   (total: about 1.3 KB; the rest remains reserved for future buffers)
  *
  * The last three survive a reset on purpose, and SharedMem_Init() leaves them
@@ -287,8 +290,10 @@ extern uint32_t g_freq_override_tables[FREQ_MAX_OVERRIDE_TABLES][FREQ_MAX_CELLS_
 extern CoreCrash_t              g_core_crash_cm0;       /*!< The CM0+ fault handler writes; the CM0+ reports it at its next BOOT and clears it. */
 extern CoreCrash_t              g_core_crash_cm4;       /*!< The CM4 fault handler writes; the CM4 reports it at its next BOOT and clears it. */
 extern uint32_t                 g_reset_flags;          /*!< RCC_CSR reset flags, read and cleared by the CM4 at every boot; the CM0+ prints them. */
-#if defined(BENCH_FAULT_CM4) || defined(BENCH_FAULT_CM0)
-extern uint32_t                 g_bench_fault_gate[2];  /*!< Build Override test only: [0] CM0+, [1] CM4 forced a fault, so the restart does not force it again. */
+extern CoreState_t              g_core_state_cm0;       /*!< Heartbeat, checkpoint and promised wake of the CM0+; the CM4 watches it, the CM0+ prints the previous run's at BOOT. */
+extern CoreState_t              g_core_state_cm4;       /*!< The same for the CM4. */
+#if defined(BENCH_FAULT_CM4) || defined(BENCH_FAULT_CM0) || defined(BENCH_LOOP_CM4) || defined(BENCH_LOOP_CM0) || defined(BENCH_SKIP_ALARM)
+extern uint32_t                 g_bench_fault_gate[2];  /*!< Build Override test only: [0] CM0+, [1] CM4 forced a fault, a loop or a lost wake, so the restart does not force it again. */
 #endif
 
 /*!

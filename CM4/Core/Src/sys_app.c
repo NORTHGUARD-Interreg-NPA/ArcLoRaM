@@ -35,6 +35,7 @@
 /* USER CODE BEGIN Includes */
 #include "arclog.h"
 #include "core_fault.h"
+#include "core_state_glue.h"
 #include <string.h>
 /* USER CODE END Includes */
 
@@ -179,6 +180,7 @@ void UTIL_ADV_TRACE_PostSendHook(void)
 
 void UTIL_SEQ_PostIdle(void)
 {
+  CoreWatch_PostIdle();
   /* CM4 wakes from STOP2 about once a second; a line per wake would eat a
    * large share of the 9600-baud trace link. Report a summary instead. */
   static uint32_t stop2_wakes;
@@ -218,6 +220,7 @@ UTIL_ADV_TRACE_SetVerboseLevel(VLEVEL_H); //has to be set after MBMUXIF_TraceIni
   ARCLOG(ARCLOG_MOD_SYS, VLEVEL_ALWAYS, "BOOT", "build=%s rst=%s rsf=%08x", BENCH_BUILD_ID,
          CoreFault_ResetName(), (unsigned)CoreFault_ResetFlags());
   CoreFault_ReportAtBoot();
+  CoreStateBoot_Report();
 
   init_status = MBMUXIF_SystemInit();
   if (init_status < 0)

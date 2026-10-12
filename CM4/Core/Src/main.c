@@ -28,6 +28,8 @@
 /* USER CODE BEGIN Includes */
 #include "sys_app.h"
 #include "core_fault.h"
+#include "core_state_glue.h"
+#include "core_cp.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -74,6 +76,7 @@ int main(void)
    * the faults (Common/Log/core_fault.h, #101). */
   CoreFault_CaptureResetCause();
   CoreFault_Init();
+  CoreStateBoot_Snapshot();
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -122,6 +125,7 @@ int main(void)
 #endif
 
    setLedCM4();
+  CoreWatch_Start();
   while (1)
   {
 
@@ -129,6 +133,8 @@ int main(void)
     MX_SubGHz_Phy_Process();
 
     /* USER CODE BEGIN 3 */
+    CORE_BEAT();
+    CORE_CP(CP_CM4_LOOP);
     CoreFault_BenchPoll();
   }
   /* USER CODE END 3 */
