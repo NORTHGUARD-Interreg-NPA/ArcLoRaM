@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from arclog.model import parse_line
-from arclog.schema import EVENTS, validate
+from arclog.schema import (EVENTS, events_from_dict, events_from_source, events_to_dict, validate)
 
 MOD_CHARS = {"TDMA": "T", "MAC": "M", "SYNC": "Y", "RADIO": "R", "MBMUX": "X", "SYS": "S", "POWER": "P"}
 
@@ -119,3 +119,55 @@ def test_unregistered_board_gives_the_table_entry_to_add():
         "BOOT: board not registered, add { { 0x00200041u, 0x5642500Au, 0x20383354u }, "
         "<next free id> }, to Common/Protocol/node_id.c"
     ]
+
+
+# --- the schema of the build that wrote a record ------------------------------------------------------------
+
+
+def test_the_events_read_from_the_source_of_the_schema_are_the_table_itself():
+    from arclog import schema
+
+    read = events_from_source(Path(schema.__file__).read_text(encoding="utf-8"))
+
+    assert {n: (e.mod, e.keys, e.optional) for n, e in read.items()} == \
+        {n: (e.mod, e.keys, e.optional) for n, e in EVENTS.items()}
+
+
+def test_a_source_is_read_and_never_run():
+    source = (
+        "from arclog.model import Kind\n"
+        "EVENTS = {\n"
+        '    "BOOT": Event("S", (), 1 / 0, ("cls", "id")),\n'
+        '    "RX_WIN": Event("T", ("last", "cap"), "doc", optional=("x",)),\n'
+        "}\n"
+        "raise SystemExit('run')\n"
+    )
+
+    events = events_from_source(source)
+
+    assert (events["BOOT"].mod, events["BOOT"].keys, events["BOOT"].optional) == ("S", (), ("cls", "id"))
+    assert (events["RX_WIN"].keys, events["RX_WIN"].optional) == (("last", "cap"), ("x",))
+
+
+@pytest.mark.parametrize("source", ["x = 1\n", "EVENTS = {'A': make('S')}\n", "EVENTS = {'A': Event()}\n"])
+def test_a_source_without_a_table_of_events_is_refused(source):
+    with pytest.raises(ValueError):
+        events_from_source(source)
+
+
+def test_a_line_is_checked_with_the_table_of_its_build_when_one_is_given():
+    # Since #36 RX_WIN carries g and win; a record of an older build does not, and is not wrong.
+    old = events_from_source(
+        'EVENTS = {"RX_WIN": Event("T", ("last", "cap"), "")}\n')
+    line = parse_line("261007T120000.0000 0T H #01 RX_WIN last=1 cap=2")
+
+    assert validate(line) == ["RX_WIN: missing g,win"]
+    assert validate(line, old) == []
+    assert validate(line) == ["RX_WIN: missing g,win"]  # the checkout's table is untouched
+
+
+def test_a_table_survives_being_kept_as_plain_data():
+    kept = events_from_dict(events_to_dict(EVENTS))
+
+    assert {n: (e.mod, e.keys, e.optional) for n, e in kept.items()} == \
+        {n: (e.mod, e.keys, e.optional) for n, e in EVENTS.items()}

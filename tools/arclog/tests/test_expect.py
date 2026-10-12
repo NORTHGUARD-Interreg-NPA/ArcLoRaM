@@ -9,7 +9,7 @@ from arclog.cli import main
 from arclog.expect import (FAIL, PASS, TIMEOUT, DirFollower, Run, parse_duration, parse_since,
                            replay, spec_from_dict)
 from arclog.model import parse_line
-from arclog.schema import EVENTS
+from arclog.schema import EVENTS, events_from_source
 
 SINCE = datetime(2026, 9, 29, 10, 0, 0, tzinfo=timezone.utc)
 UID = "0026001a3232501420383543"
@@ -475,3 +475,31 @@ def test_invalid_ranges_are_refused(cond, problem):
          "expect": [{"event": "SYNC_RX", "where": {"err": cond}}]}
     with pytest.raises(ValueError, match=__import__("re").escape(problem)):
         spec_from_dict(d)
+
+
+def test_a_run_checks_the_lines_with_the_schema_it_is_given():
+    t = Trace()
+    t.boot(1, "n2")
+    t.emit(5, "n2", "0", "RX_WIN", last=1, cap=2)  # a build from before g and win
+    old = events_from_source('EVENTS = {"RX_WIN": Event("T", ("last", "cap"), ""), "BOOT": Event("S", (), "", '
+                             '("cls", "id", "uid", "fw", "build", "sync")), '
+                             '"CORE_SYNC": Event("X", ("stage",), "")}\n')
+
+    run = Run(spec(), SINCE, events=old)
+    replay(run, t.lines)
+    other = Run(spec(), SINCE)
+    replay(other, t.lines)
+
+    assert run.verdict is None or run.verdict.code != FAIL
+    assert other.verdict is not None and "missing g,win" in other.verdict.reason
+
+
+def test_what_a_run_still_waits_for_is_listed():
+    s = spec(expect=[{"node": "n2", "event": "CLK", "where": {"to": "WARM"}}, {"node": "n2", "event": "SLOT", "count": 3}])
+    t = Trace()
+    t.boot(1, "n2")
+    run = Run(s, SINCE)
+    replay(run, t.lines)
+    run.tick(SINCE + timedelta(seconds=40))
+
+    assert run.pending() == ["n2 CLK to=WARM (0/1)", "n2 SLOT (0/3)"]

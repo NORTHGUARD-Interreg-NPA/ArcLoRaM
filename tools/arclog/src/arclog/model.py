@@ -117,6 +117,13 @@ def parse_dev_time(ts: str) -> datetime | None:
 
 
 def parse_host_time(text: str) -> datetime | None:
+    if len(text) == 27 and text[26] == "Z":
+        # What `format_host_time` writes, which is every line of a capture: strptime costs 30 us a line, which a
+        # record of half a million lines feels.
+        try:
+            return datetime.fromisoformat(text[:26] + "+00:00")
+        except ValueError:
+            pass
     try:
         return datetime.strptime(text, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
     except ValueError:
