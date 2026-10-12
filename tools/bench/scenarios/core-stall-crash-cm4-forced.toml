@@ -1,0 +1,35 @@
+# Purpose: acceptance. Issue #101, Test Record docs/test-tracker/101-core-stall.md.
+# Claim: with the BusFault handler off, the same fault arrives as the forced HardFault of silence events 3 and 4, and the
+# record says so (kind hard, HFSR FORCED, CFSR IBUSERR).
+# Same as core-stall-crash-cm4.toml with BENCH_FAULT_CM4=4: the BusFault enable is cleared just before the jump.
+description = "A forced bus error with BusFault off arrives as the forced HardFault of events 3 and 4"
+timeout = "8m"
+
+[nodes]
+1 = "C3"
+6 = "C2"
+
+[overrides]
+BENCH_FAULT_CM4 = "4"
+BENCH_FAULT_NODE = "6"
+BENCH_FAULT_AFTER_S = "60"
+
+[[action]]
+reset = 6
+at = "+4m"
+
+[[expect]]
+node = 6
+event = "CORE_CRASH"
+where = { core = "cm4", kind = "hard", why = "ibuserr", pc = "60000000" }
+within = "6m"
+
+[[expect]]
+node = 6
+event = "CORE_CRASH_SCB"
+where = { core = "cm4", cfsr = "00000100", hfsr = "40000000" }
+within = "6m"
+
+[[forbid]]
+node = 1
+event = "CORE_CRASH"

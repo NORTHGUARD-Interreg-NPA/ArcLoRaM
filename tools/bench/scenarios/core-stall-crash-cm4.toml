@@ -1,0 +1,38 @@
+# Purpose: acceptance. Issue #101, Test Record docs/test-tracker/101-core-stall.md.
+# Claim: a fault on the CM4 leaves a crash record that the next BOOT reports, with the registers of the fault.
+# Node 6 (a C2) is made to jump to an address with no memory from its main loop (BENCH_FAULT_CM4=1: the signature of
+# silence events 3 and 4), 60 s after its boot; it stops in its fault handler, silent. Bench resets it at +4 min, as a human
+# would, and its next BOOT must print CORE_CRASH for the CM4: the BusFault handler (enabled by this change) names the
+# instruction bus error, where it used to be a forced HardFault, and the stacked pc is the address jumped to.
+# Node 1 (the C3) keeps the Sync going and must not report a crash.
+description = "A forced instruction bus error on the CM4 is reported at the next BOOT"
+timeout = "8m"
+
+[nodes]
+1 = "C3"
+6 = "C2"
+
+[overrides]
+BENCH_FAULT_CM4 = "1"
+BENCH_FAULT_NODE = "6"
+BENCH_FAULT_AFTER_S = "60"
+
+[[action]]
+reset = 6
+at = "+4m"
+
+[[expect]]
+node = 6
+event = "CORE_CRASH"
+where = { core = "cm4", kind = "bus", why = "ibuserr", pc = "60000000" }
+within = "6m"
+
+[[expect]]
+node = 6
+event = "CORE_CRASH_SCB"
+where = { core = "cm4", cfsr = "00000100", hfsr = "00000000" }
+within = "6m"
+
+[[forbid]]
+node = 1
+event = "CORE_CRASH"
