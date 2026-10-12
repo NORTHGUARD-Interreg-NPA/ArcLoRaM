@@ -34,6 +34,7 @@
 
 /* USER CODE BEGIN Includes */
 #include "arclog.h"
+#include "core_fault.h"
 #include <string.h>
 /* USER CODE END Includes */
 
@@ -214,7 +215,9 @@ UTIL_ADV_TRACE_SetVerboseLevel(VLEVEL_H); //has to be set after MBMUXIF_TraceIni
   FEAT_INFO_List_t *p_cm0plus_supported_features_list;
   int8_t init_status;
 
-  ARCLOG(ARCLOG_MOD_SYS, VLEVEL_ALWAYS, "BOOT", "build=%s", BENCH_BUILD_ID);
+  ARCLOG(ARCLOG_MOD_SYS, VLEVEL_ALWAYS, "BOOT", "build=%s rst=%s rsf=%08x", BENCH_BUILD_ID,
+         CoreFault_ResetName(), (unsigned)CoreFault_ResetFlags());
+  CoreFault_ReportAtBoot();
 
   init_status = MBMUXIF_SystemInit();
   if (init_status < 0)

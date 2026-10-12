@@ -39,6 +39,7 @@ _Static_assert(sizeof(AlarmBRequest_t)       == 12u, "AlarmBRequest_t size misma
 _Static_assert(sizeof(ComplianceStatus_t)    == 16u, "ComplianceStatus_t size mismatch");
 _Static_assert(sizeof(EmergencyAlertSlot_t)  == 12u, "EmergencyAlertSlot_t size mismatch");
 _Static_assert(sizeof(PhaseFrequency_t)       == 20u, "PhaseFrequency_t size mismatch");
+_Static_assert(sizeof(CoreCrash_t)            == 108u, "CoreCrash_t size mismatch");
 
 /* =========================================================================
  * Global instances in SRAM2 application shared region
@@ -51,7 +52,9 @@ _Static_assert(sizeof(PhaseFrequency_t)       == 20u, "PhaseFrequency_t size mis
  *   g_emergency_alert_slot  +0x020  12 B
  *   g_freq_resolver_state   +0x02C 400 B
  *   g_freq_override_tables  +0x1BC 640 B
- *   total: 1088 B
+ *   g_core_crash_cm0, g_core_crash_cm4, g_reset_flags: appended after them,
+ *   NOT zeroed by SharedMem_Init (#101); new shared variables go at the end so
+ *   that no offset above moves.
  * ========================================================================= */
 
 #ifndef HOST_TEST
@@ -66,6 +69,12 @@ uint32_t                 g_cm4_heartbeat        SHARED_APP;
 EmergencyAlertSlot_t     g_emergency_alert_slot SHARED_APP;
 FrequencyResolverState_t g_freq_resolver_state  SHARED_APP;
 uint32_t g_freq_override_tables[FREQ_MAX_OVERRIDE_TABLES][FREQ_MAX_CELLS_PER_PHASE] SHARED_APP;
+CoreCrash_t              g_core_crash_cm0       SHARED_APP;
+CoreCrash_t              g_core_crash_cm4       SHARED_APP;
+uint32_t                 g_reset_flags          SHARED_APP;
+#if defined(BENCH_FAULT_CM4) || defined(BENCH_FAULT_CM0)
+uint32_t                 g_bench_fault_gate[2]  SHARED_APP;
+#endif
 
 /* =========================================================================
  * SharedMem_Init
@@ -79,4 +88,6 @@ void SharedMem_Init(void)
     memset(&g_emergency_alert_slot, 0, sizeof(g_emergency_alert_slot));
     memset(&g_freq_resolver_state,  0, sizeof(g_freq_resolver_state));
     memset(&g_freq_override_tables, 0, sizeof(g_freq_override_tables));
+    /* g_core_crash_cm0/cm4, g_reset_flags and g_bench_fault_gate are NOT zeroed: they carry
+     * what the previous run (or the CM4 a moment ago) left, for this boot to report. */
 }

@@ -45,6 +45,7 @@
 #include "calr_policy.h"         /* CalrPolicy_Decide */
 #include "probe.h"               /* PROBE_* (BENCH_PROBE only) */
 #include "node_id.h"          /* NodeId_ReadUid, NodeId_FromUid */
+#include "core_fault.h"       /* the reset cause the CM4 kept, the crash record (#101) */
 
 /* =========================================================================
  * Radio IRQ timestamps
@@ -769,11 +770,13 @@ void SubGhzPhyTask_Init(void)
 
     uint32_t uid[NODE_UID_WORDS];
     NodeId_ReadUid(uid);
-    ARCLOG(ARCLOG_MOD_SYS, VLEVEL_ALWAYS, "BOOT", "cls=C%u id=%u uid=%08x%08x%08x fw=%u.%u.%u build=%s sync=%s",
+    ARCLOG(ARCLOG_MOD_SYS, VLEVEL_ALWAYS, "BOOT", "cls=C%u id=%u uid=%08x%08x%08x fw=%u.%u.%u build=%s sync=%s rst=%s rsf=%08x",
            (unsigned)NODE_CLASS, (unsigned)NodeId_FromUid(uid),
            (unsigned)uid[0], (unsigned)uid[1], (unsigned)uid[2],
            (unsigned)APP_VERSION_MAIN, (unsigned)APP_VERSION_SUB1,
-           (unsigned)APP_VERSION_SUB2, BENCH_BUILD_ID, SYNC_PROFILE_NAME);
+           (unsigned)APP_VERSION_SUB2, BENCH_BUILD_ID, SYNC_PROFILE_NAME,
+           CoreFault_ResetName(), (unsigned)CoreFault_ResetFlags());
+    CoreFault_ReportAtBoot();
 
     /* 1. Radio — must be initialised before any UTIL_TIMER usage.
      *    TxTimeoutTimer and RxTimeoutTimer inside the radio driver are created

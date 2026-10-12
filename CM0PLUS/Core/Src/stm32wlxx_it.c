@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "subghz_phy_task.h"
+#include "core_fault.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -72,7 +73,7 @@ extern SUBGHZ_HandleTypeDef hsubghz;
 void NMI_Handler(void)
 {
   /* USER CODE BEGIN NonMaskableInt_IRQn 0 */
-
+  CORE_FAULT_ENTRY(CORE_CRASH_KIND_NMI);
   /* USER CODE END NonMaskableInt_IRQn 0 */
   /* USER CODE BEGIN NonMaskableInt_IRQn 1 */
    while (1)
@@ -87,7 +88,7 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-
+  CORE_FAULT_ENTRY(CORE_CRASH_KIND_HARD);
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {
