@@ -17,7 +17,7 @@ import socket
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterator, TextIO
 from urllib.parse import urlsplit
@@ -28,11 +28,24 @@ from arclog.model import Line, format_host_time, parse_line
 DEFAULT_BAUD = 9600
 RECONNECT_S = 2.0
 
+#: A Pi Node's log server sends its own heartbeat ("[pi] uart_idle=7s ntp=synced") every 31 s, a node quiet or not:
+#: a TCP link with no byte at all for this long (the heartbeat included) is dead, whatever the OS thinks of it.
+#: The heartbeat is too slow to find a stall of 10 s, which the OS keepalive below is for.
+TCP_STALL_S = 45.0
+
+#: The OS keepalive on a log link: probe after 3 s of silence, then every second; 5 probes unanswered and the OS
+#: drops the connection. A link that stalled (a cut, a Pi that lost power, a firewall dropping packets) is found
+#: dead 8 s after its last sign of life, where the 30 s idle and 10 probes 10 s apart of before took 130 s.
+KEEPALIVE_IDLE_S = 3
+KEEPALIVE_INTERVAL_S = 1
+KEEPALIVE_COUNT = 5
+KEEPALIVE_DEAD_S = KEEPALIVE_IDLE_S + KEEPALIVE_COUNT * KEEPALIVE_INTERVAL_S
+
 
 def serial_lines(port: str, baud: int = DEFAULT_BAUD, reconnect: bool = True,
                  log: Callable[[str], None] = lambda m: print(m, file=sys.stderr),
                  duration_s: float | None = None,
-                 on_state: Callable[[bool], None] = lambda up: None,
+                 on_state: Callable[..., None] = lambda up, since=None: None,
                  ) -> Iterator[tuple[datetime, str]]:
     """Yield (host UTC time, line) from a serial port, reconnecting on errors.
 
@@ -96,49 +109,78 @@ def parse_tcp_url(url: str) -> tuple[str, int]:
 
 
 def _keepalive(sock: socket.socket) -> None:
-    """Detect a link that died without a close (Wi-Fi, relay): a quiet board must not look alive."""
+    """Detect a link that died without a close (Wi-Fi, relay, a firewall): a quiet board must not look alive.
+    The OS gives up KEEPALIVE_DEAD_S after the last sign of life."""
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
     try:
-        if hasattr(socket, "SIO_KEEPALIVE_VALS"):  # Windows: on, idle 30 s, interval 10 s
-            sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 30_000, 10_000))
-        else:
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30)
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, KEEPALIVE_IDLE_S)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, KEEPALIVE_INTERVAL_S)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, KEEPALIVE_COUNT)
     except (AttributeError, OSError):
-        pass
+        try:
+            if hasattr(socket, "SIO_KEEPALIVE_VALS"):  # an older Windows: timers in ms, always 10 probes
+                sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, KEEPALIVE_IDLE_S * 1000, KEEPALIVE_INTERVAL_S * 1000))
+        except (AttributeError, OSError):
+            pass
+
+
+class _Stalled(ConnectionError):
+    """No byte for TCP_STALL_S: the reader's own verdict, not the OS's."""
+
+
+def _lost_s(silent_s: float, stalled: bool) -> float:
+    """How long before it failed a link was last known alive, given the silence that preceded the failure.
+
+    A reset or a close right after data: alive until now. After longer silence the OS had been probing, and a
+    probe answered is a sign of life, so the link was alive KEEPALIVE_DEAD_S ago (or at its last byte, if later).
+    A link the reader itself gave up on (TCP_STALL_S) had no sign of life since its last byte.
+    """
+    if stalled:
+        return silent_s
+    return 0.0 if silent_s <= KEEPALIVE_IDLE_S else min(silent_s, KEEPALIVE_DEAD_S)
 
 
 def tcp_lines(url: str, reconnect: bool = True,
               log: Callable[[str], None] = lambda m: print(m, file=sys.stderr),
               duration_s: float | None = None,
-              on_state: Callable[[bool], None] = lambda up: None) -> Iterator[tuple[datetime, str]]:
+              on_state: Callable[..., None] = lambda up, since=None: None,
+              monotonic: Callable[[], float] = time.monotonic) -> Iterator[tuple[datetime, str]]:
     """Yield (host UTC time, line) from a Pi Node's log server, reconnecting on errors.
 
-    Same contract as serial_lines, `on_state` included. Lines the server sent while this reader was away are not
-    replayed: the live stream keeps nothing (a recorder on the Pi is the way to not lose them).
+    Same contract as serial_lines, `on_state` included; `on_state(False, since)` carries the UTC time the link was
+    last known alive, which is before the moment it was found dead when it had gone silent (`_lost_s`).
+    The link is dead when the OS gives up on it (`_keepalive`) or when no byte comes for TCP_STALL_S.
+    Lines the server sent while this reader was away are not replayed: the live stream keeps nothing (a recorder
+    on the Pi is the way to not lose them).
     """
     host, port = parse_tcp_url(url)
-    deadline = time.monotonic() + duration_s if duration_s else None
+    deadline = monotonic() + duration_s if duration_s else None
     down = False
+    last_rx: float | None = None  # monotonic time of the last byte of the connection in hand
     while True:
         try:
             with socket.create_connection((host, port), timeout=5.0) as sock:
                 _keepalive(sock)
                 sock.settimeout(1.0)
                 down = False
+                last_rx = monotonic()
                 on_state(True)
                 log(f"arclog: listening on {url}")
                 buf = bytearray()
                 while True:
-                    if deadline is not None and time.monotonic() >= deadline:
+                    if deadline is not None and monotonic() >= deadline:
                         return
                     try:
                         chunk = sock.recv(4096)
-                    except socket.timeout:
+                    except socket.timeout as exc:
+                        if exc.errno is not None:  # the OS gave up on the connection: not our 1 s read timeout
+                            raise
+                        if monotonic() - last_rx > TCP_STALL_S:
+                            raise _Stalled(f"{host}:{port} sent nothing for {monotonic() - last_rx:.0f} s") from None
                         continue
                     if not chunk:
                         raise ConnectionError(f"{host}:{port} closed the connection")
+                    last_rx = monotonic()
                     buf.extend(chunk)
                     while True:
                         nl = buf.find(b"\n")
@@ -149,10 +191,12 @@ def tcp_lines(url: str, reconnect: bool = True,
                         if raw.strip():
                             yield datetime.now(timezone.utc), raw
         except OSError as exc:
-            on_state(False)
+            silent = monotonic() - last_rx if last_rx is not None else 0.0
+            last_rx = None
+            on_state(False, datetime.now(timezone.utc) - timedelta(seconds=_lost_s(silent, isinstance(exc, _Stalled))))
             if not reconnect:
                 raise
-            if deadline is not None and time.monotonic() >= deadline:
+            if deadline is not None and monotonic() >= deadline:
                 return
             if not down:
                 log(f"arclog: {url} unavailable ({exc}); retrying every {RECONNECT_S:.0f} s")
@@ -226,8 +270,11 @@ def capture(ports: list[tuple[str, str]], out_dir: Path, baud: int = DEFAULT_BAU
         node_of = dict(ports)
 
         def source(port: str) -> Iterator[tuple[datetime, str]]:
-            def on_state(up: bool) -> None:
-                (marks.port_up if up else marks.port_down)(node_of[port])
+            def on_state(up: bool, since: datetime | None = None) -> None:
+                if up:
+                    marks.port_up(node_of[port])
+                else:
+                    marks.port_down(node_of[port], since)
             if port.startswith("tcp://"):
                 return tcp_lines(port, duration_s=duration_s, on_state=on_state)
             return serial_lines(port, baud, duration_s=duration_s, on_state=on_state)
