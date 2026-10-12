@@ -69,7 +69,7 @@ static const Phase_t * const s_table[] = {
 #define TABLE_SIZE  ( (uint8_t)( sizeof(s_table) / sizeof(s_table[0]) ) )
 
 /* Phase start offsets, computed by TdmaTable_Init at boot. */
-static uint32_t s_phase_start_ms[2];
+static uint32_t s_phase_start_ms[TABLE_SIZE];
 
 /* =========================================================================
  * Accessor implementations
