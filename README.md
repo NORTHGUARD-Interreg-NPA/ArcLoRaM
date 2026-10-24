@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/interreg_npa_banner.png" alt="Interreg Northern Periphery and Arctic programme banner" width="400">
+  <img src="assets/interreg_npa_banner.png" alt="Interreg Northern Periphery and Arctic programme banner" width="400">
 </p>
 
 # ArcLoRaM Firmware
@@ -36,8 +36,8 @@ mutexes) and IPCC/MbMux event signals (`SYNC_LOCKED`, `SYNC_LOST`,
 
 ### Protocol machines
 
-Five protocol machines run as self-contained C modules within the
-`UTIL_SEQ` cooperative-task framework:
+Five protocol machines run on the CM0+, and the Sensor Scheduler on the CM4, as
+self-contained C modules within the `UTIL_SEQ` cooperative-task framework:
 
 | Machine | Core | Module | Purpose |
 |---------|------|--------|---------|
@@ -103,22 +103,28 @@ so a single missed wake never permanently desynchronises the schedule.
 ## Repository layout
 
 ```
-CM0PLUS/          CM0+ firmware (radio and protocol)
-  SubGHz_Phy/Logic/   Protocol machines (TDMA, MAC, freq, compliance, guard)
-  Core/               HAL drivers, RTC, IPCC, GPIO, DMA
-CM4/              CM4 firmware (application)
-  SubGHz_Phy/         Sensor scheduler, diagnostics
-  MbMux/              Radio mailbox wrapper
-Common/            Shared code (both cores)
-  Protocol/           TDMA table, node ID, protocol types
-  SharedMemory/       Inter-core shared memory structures
-  Log/                ArcLog structured trace
-  MbMux/              Mailbox multiplexer definitions
-Tests/            Host-side unit tests (CMake + Unity)
-docs/             ADRs, diagrams, PRDs, research notes, assets
-CONTEXT.md        Domain language glossary (authoritative terminology)
-ArcLoRaM_Base.ioc  STM32CubeIDE project configuration
+CM0PLUS/             CM0+ firmware (radio and protocol)
+  SubGHz_Phy/Logic/      Protocol machines (TDMA, MAC, freq, compliance, guard)
+  Core/                  HAL drivers, RTC, IPCC, GPIO, DMA
+CM4/                 CM4 firmware (application)
+  SubGHz_Phy/            Sensor scheduler, diagnostics
+  MbMux/                 Radio mailbox wrapper
+Common/              Shared code (both cores)
+  Protocol/              TDMA table, node ID, protocol types
+  SharedMemory/          Inter-core shared memory structures
+  Log/                   ArcLog structured trace
+  MbMux/                 Mailbox multiplexer definitions
+Drivers/             STM32WLxx HAL driver and CMSIS
+Middlewares/         SubGHz radio driver
+Utilities/           Trace, sequencer, timer and low-power utilities
+Tests/               Host-side unit tests (CMake + Unity)
+assets/              Images used by this README
+ArcLoRaM_Base.ioc    STM32CubeMX project configuration
 ```
+
+Comments in the source cite `CONTEXT.md` (the domain glossary) and Architecture
+Decision Records.
+These design documents are not part of this repository.
 
 ## Building the firmware
 
@@ -144,21 +150,13 @@ They do not require firmware hardware or a cross-compiler.
 
 ```sh
 cd Tests
-cmake --preset default
+cmake --preset host-linux
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+Use the `host-linux` preset on Linux, and `host-mingw` on Windows with
+MSYS2 UCRT64.
 Tests use the [Unity](https://github.com/ThrowTheSwitch/Unity) test framework,
 fetched automatically by CMake.
 See `Tests/TESTING_GUIDE.md` for the full reference.
-
-## Documentation
-
-| Document | Content |
-|----------|---------|
-| `CONTEXT.md` | Domain language glossary: all terms, concepts, and contracts |
-| `docs/adr/` | Architecture Decision Records |
-| `docs/diagrams/` | System overview, MAC state machine, TDMA slot execution, boot flow |
-| `docs/prd_protocol_machines.md` | PRD for the five protocol machines |
-| `Tests/TESTING_GUIDE.md` | Unit test setup and conventions |
