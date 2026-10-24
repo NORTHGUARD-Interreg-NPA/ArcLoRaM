@@ -1,8 +1,0 @@
-{
-    "cmake.sourceDirectory": "${workspaceFolder}/Tests",
-    "cmake.buildDirectory": "${workspaceFolder}/Tests/build",
-    "cmake.configurePreset": "host-mingw",
-    "cmake.buildPreset":    "host-mingw",
-    "cmake.testPreset": "host-mingw",
-    "C_Cpp.default.compilerPath": ""
-}

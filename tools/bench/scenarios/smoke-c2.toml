@@ -1,6 +1,0 @@
-# The smallest scenario: flash one board, check that both cores boot the build.
-description = "Node 2 boots as C2"
-timeout = "2m"
-
-[nodes]
-2 = "C2"

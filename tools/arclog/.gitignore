@@ -1,7 +1,0 @@
-.venv/
-__pycache__/
-.pytest_cache/
-runs/
-
-# A worktree reaches the shared runs of the main checkout through a symlink named runs (bench makes it)
-runs
