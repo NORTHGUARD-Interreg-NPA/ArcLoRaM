@@ -792,10 +792,11 @@ void SubGhzPhyTask_Init(void)
     s_radio_events.CadDone          = NULL;
     Radio.Init(&s_radio_events);
 
-    /* Configure modem: LoRa SF12 / BW125 / CR4-5 / 14 dBm / CRC on.
+    /* Configure modem: LoRa SF12 / BW125 / CR4-5 / RADIO_TX_POWER_DBM (14 dBm; above 15 dBm the driver
+     * switches to the high-power amplifier, 22 dBm at most, channel_plan.h) / CRC on.
      * bandwidth index 0 = 125 kHz, datarate = SF, coderate 1 = CR 4/5. */
     Radio.SetTxConfig(MODEM_LORA,
-                      14,    /* power dBm  */
+                      RADIO_TX_POWER_DBM,    /* power dBm  */
                       0u,    /* fdev (FSK only) */
                       0u,    /* bandwidth index: 0 = 125 kHz */
                       12u,   /* datarate: SF12 */

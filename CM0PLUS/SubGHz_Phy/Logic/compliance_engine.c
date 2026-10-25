@@ -42,7 +42,16 @@ typedef struct {
 #define ETSI_WINDOW_MS  3600000u
 #endif
 
+/* The first row that holds the frequency wins: a narrower row goes before the broad one. */
 static const Band_t k_bands[] = {
+    {
+        /* ETSI EN 300 220-2 sub-band P: 869.4 - 869.65 MHz, 10 % duty cycle, 500 mW ERP (27 dBm).
+         * The only row where the board's high-power amplifier (22 dBm) may run. */
+        .freq_min_hz       = 869400000u,
+        .freq_max_hz       = 869650000u,
+        .duty_cycle_x10    = 100u,  /* 10 % */
+        .max_tx_power_dbm  = 27,
+    },
     {
         /* ETSI EN 300 220-2 h1.4/h1.5/h1.8 — EU 868 MHz ISM
          * 863–870 MHz, 1 % duty cycle, 25 mW (14 dBm) */
