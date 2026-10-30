@@ -23,10 +23,11 @@
  *              - From CHANNEL_MIN_HZ to CHANNEL_MAX_HZ: a 125 kHz channel centred
  *                there stays inside 865.0 to 868.6 MHz, the ETSI EN 300 220
  *                sub-bands L (865-868 MHz) and M (868-868.6 MHz): 1 % duty cycle,
- *                25 mW ERP, the row the Compliance Engine knows. The sub-bands
- *                around them differ (863-865 MHz and 868.7-869.2 MHz allow 0.1 %,
- *                869.4-869.65 MHz allows 10 % and 500 mW) and are out of the plan
- *                until the engine learns them.
+ *                25 mW ERP, a row of the Compliance Engine. The sub-bands around
+ *                them differ: 863-865 MHz and 868.7-869.2 MHz allow 0.1 % and are
+ *                out of the plan until the engine learns them; 869.4-869.65 MHz allows
+ *                10 % and 500 mW, has a row of its own in the engine and one channel
+ *                in the plan (\ref CHANNEL_HIGH_POWER_HZ, below).
  *              - Channels of two sessions are CHANNEL_SPACING_HZ apart. The
  *                Semtech SX1261/2 summary gives 88 dB of blocking immunity at a
  *                1 MHz offset; the widest gap on the bench, a desk node at about
