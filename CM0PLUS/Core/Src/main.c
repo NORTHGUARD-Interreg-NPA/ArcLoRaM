@@ -26,6 +26,8 @@
 /* USER CODE BEGIN Includes */
 #include "sys_app.h"
 #include "core_fault.h"
+#include "core_state_glue.h"
+#include "core_cp.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -67,7 +69,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+  CoreStateBoot_Snapshot();
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -98,6 +100,7 @@ int main(void)
     MX_SubGHz_Phy_Process();
 
     /* USER CODE BEGIN 3 */
+    CORE_BEAT();
     CoreFault_BenchPoll();
   }
   /* USER CODE END 3 */

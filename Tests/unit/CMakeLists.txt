@@ -144,6 +144,11 @@ add_unity_test(test_reset_cause
     test_reset_cause.c
 )
 
+# The liveness record of a core and the survivor's judgement of it (#101).
+add_unity_test(test_core_state
+    test_core_state.c
+)
+
 add_unity_test(test_sync_stamp
     test_sync_stamp.c
 )

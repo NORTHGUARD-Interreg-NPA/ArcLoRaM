@@ -23,6 +23,7 @@
 #include "stm32_lpm_if.h"
 
 /* USER CODE BEGIN Includes */
+#include "core_cp.h"
 
 /* USER CODE END Includes */
 
@@ -98,6 +99,7 @@ void PWR_EnterStopMode(void)
   LL_PWR_ClearFlag_C2STOP_C2STB();
 
   /* USER CODE BEGIN EnterStopMode_2 */
+  CORE_CP(CP_CM0_STOP_IN);
   g_stop2_flag = 1;
   /* USER CODE END EnterStopMode_2 */
   HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
@@ -119,6 +121,7 @@ void PWR_ExitStopMode(void)
     SRAM ctrls, DMAx, DMAMux, AES, RNG, HSEM  */
 
   /* USER CODE BEGIN ExitStopMode_2 */
+  CORE_CP(CP_CM0_STOP_OUT);
 
   /* USER CODE END ExitStopMode_2 */
 }
